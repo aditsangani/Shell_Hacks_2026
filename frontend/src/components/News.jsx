@@ -3,7 +3,7 @@ import { etTime } from '../format.js'
 export default function News({ inv }) {
   const items = inv.headlines
   return (
-    <section className="card">
+    <section className="card insight-card news-card">
       <div className="step">3 · What was published</div>
       <h2>{items.length} NYT headline{items.length === 1 ? '' : 's'} around the move</h2>
       {items.length === 0 ? (
