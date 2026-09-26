@@ -439,20 +439,6 @@ def _triage_failure(e: Exception) -> tuple[bool, str]:
     return False, f"Gemini call failed: {scrub(e)[:200]}"
 
 
-def _unstaged(pool: list[dict], inv: dict, note: str) -> list[dict]:
-    """Show the sampled articles even when triage could not run.
-
-    The articles are real evidence, so hiding them because the model is unavailable would
-    throw away the one part of this page that does not need a key.
-    """
-    return [{"ref": a["ref"], "scope": "unclassified", "significance": "low",
-             "why": note, "thesis": "", "pub_date": a["pub_date"],
-             "headline": a["headline"], "url": a["url"], "snippet": a["snippet"],
-             **classify_article_timing(a["pub_date"], inv["event_date"],
-                                       inv.get("prior_session_date"))}
-            for a in pool]
-
-
 def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -> dict:
     """Timeline payload from cache only. Never blocks on the network.
 
@@ -550,11 +536,11 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         payload["quota_exhausted"] = quota
         payload["triage_note"] = job.get("note") or (
             "Not triaged yet." if warming else "Not triaged — Gemini was unavailable.")
-        payload["events"] = _unstaged(pool, inv, "Not triaged yet." if warming
-                                      else "Not triaged — Gemini was unavailable.")
+        # Search results are not evidence until relevance triage selects them. Returning
+        # them as events would put unrelated articles on the chart and imply a connection.
+        payload["events"] = []
         payload["cause_conclusion"] = (
-            "Article timing is shown, but relevance triage must finish before drawing a "
-            "conclusion about possible catalysts."
+            "Relevance triage must finish before drawing a conclusion about possible catalysts."
         )
         return payload
 

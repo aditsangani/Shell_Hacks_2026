@@ -5,7 +5,6 @@ const SCOPE = {
   stock: { label: 'Stock-specific', color: 'var(--series-1)', lane: 'up', blurb: 'about this company' },
   sector: { label: 'Sector-wide', color: 'var(--series-2)', lane: 'up', blurb: 'about its sector' },
   market: { label: 'Market-wide', color: 'var(--series-3)', lane: 'down', blurb: 'about the market' },
-  unclassified: { label: 'Not yet classified', color: 'var(--muted-bar)', lane: 'up', blurb: 'awaiting triage' },
 }
 const TIMING = {
   background: { label: 'Background', tone: 'background' },
@@ -122,11 +121,9 @@ function Plot({ tl, selected, onSelect }) {
       </svg>
 
       <div className="tl-legend">
-        {Object.entries(SCOPE)
-          .filter(([k]) => k !== 'unclassified' || events.some((e) => e.scope === k))
-          .map(([k, v]) => (
+        {Object.entries(SCOPE).map(([k, v]) => (
           <span key={k}><span className="swatch" style={{ background: v.color }} />{v.label}</span>
-          ))}
+        ))}
         <span className="tl-legend-sep" />
         <span>Dot size = significance · click a dot for detail</span>
       </div>
@@ -232,7 +229,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
           {tl.pool_size} New York Times article{tl.pool_size === 1 ? '' : 's'} sampled across the{' '}
           {tl.window.label} before the session{window_tail(tl)}.
           {tl.triage_note
-            ? ` Relevance classification is pending for all ${tl.events.length}.`
+            ? ' Relevance classification is pending.'
             : ` Gemini kept ${tl.events.length} as bearing on the move.`}
           {counts.stock ? ` ${counts.stock} company-specific.` : ''}
           {counts.market ? ` ${counts.market} market-wide.` : ''}
@@ -266,16 +263,20 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
               </div>
             )}
             <Verdict tl={tl} />
-            {tl.cause_conclusion && (
-              <div className="tl-conclusion">
-                <b>Timing conclusion</b>
-                <span>{tl.cause_conclusion}</span>
-              </div>
+            {!tl.triage_note && (
+              <>
+                {tl.cause_conclusion && (
+                  <div className="tl-conclusion">
+                    <b>Timing conclusion</b>
+                    <span>{tl.cause_conclusion}</span>
+                  </div>
+                )}
+                <Plot tl={tl} selected={selected} onSelect={setSelected} />
+                {selected
+                  ? <EventCard e={selected} onClose={() => setSelected(null)} />
+                  : <p className="caveat">Select a dot to read the article and why it matters.</p>}
+              </>
             )}
-            <Plot tl={tl} selected={selected} onSelect={setSelected} />
-            {selected
-              ? <EventCard e={selected} onClose={() => setSelected(null)} />
-              : <p className="caveat">Select a dot to read the article and why it matters.</p>}
           </>
         )}
         {tl.caveat && <p className="caveat">{tl.caveat}</p>}
