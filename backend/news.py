@@ -46,6 +46,8 @@ MAX_CHUNK = timedelta(days=365)  # coarser chunks = fewer requests
 
 COMBINED_ARTICLE_CAP = 60
 SOURCE_CAPS = {"nyt": 25, "yahoo": 25, "sec": 10}
+MIN_TIMELINE_POINTS = 10
+YAHOO_NEWS_COUNT = 100
 SUPPLEMENTAL_CACHE_TTL = 15 * 60
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -396,18 +398,27 @@ def _yahoo_article(item: dict) -> dict | None:
 
 def _fetch_yahoo_news(symbol: str, company: str) -> list[dict]:
     by_url: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        ticker_future = executor.submit(yf.Ticker(symbol).get_news, count=60, tab="all")
-        search_future = executor.submit(
-            lambda: yf.Search(
-                short_company(company) or symbol,
-                max_results=1, news_count=60, lists_count=0,
-                include_nav_links=False, include_research=False, include_cultural_assets=False,
-                raise_errors=False,
-            ).news)
-        ticker_items = ticker_future.result() or []
-        search_items = search_future.result() or []
-    for item in [*ticker_items, *search_items]:
+    short = short_company(company) or symbol
+
+    def search(query: str) -> list[dict]:
+        return yf.Search(
+            query,
+            max_results=1, news_count=YAHOO_NEWS_COUNT, lists_count=0,
+            include_nav_links=False, include_research=False, include_cultural_assets=False,
+            raise_errors=False,
+        ).news or []
+
+    # Ticker feeds sometimes return fewer than ten articles even when Yahoo search has more.
+    # Query both the company name and ticker so the chart can reach its minimum without
+    # inventing placeholder events or repeating the same URL.
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(yf.Ticker(symbol).get_news,
+                                   count=YAHOO_NEWS_COUNT, tab="all"),
+                   executor.submit(search, short)]
+        if symbol.lower() != short.lower():
+            futures.append(executor.submit(search, symbol))
+        items = [item for future in futures for item in (future.result() or [])]
+    for item in items:
         article = _yahoo_article(item)
         if article:
             by_url.setdefault(article["url"], article)
@@ -583,7 +594,13 @@ def _mentions_company(article: dict, symbol: str, company: str) -> bool:
     if short and short in text:
         return True
     tokens = [t for t in re.findall(r"[a-z0-9]+", short) if len(t) >= 4]
-    return bool(tokens and any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens))
+    if tokens and any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens):
+        return True
+    # Yahoo often omits the ticker from a headline even though its metadata explicitly
+    # associates the story with the company. Treat that provider relationship as a direct
+    # match; otherwise valid stories are discarded and thin timelines result.
+    related = {str(ticker).upper() for ticker in article.get("related_tickers") or []}
+    return symbol.upper() in related
 
 
 def select_evidence(articles: list[dict], event: date, symbol: str, company: str,
@@ -621,6 +638,26 @@ def select_evidence(articles: list[dict], event: date, symbol: str, company: str
         unique.append(article)
         if len(unique) >= cap:
             break
+
+    # Provider feeds frequently syndicate related stories with highly similar headlines.
+    # Keep the strong fuzzy-deduped set first, then use distinct URLs/titles to reach the
+    # graph minimum when the source pool contains enough real items. This preserves ten
+    # genuine points without manufacturing placeholders or duplicating an exact story.
+    if len(normalised) >= MIN_TIMELINE_POINTS and len(unique) < MIN_TIMELINE_POINTS:
+        exact_titles = {_title_key(article["headline"]) for article in unique}
+        for article in normalised:
+            source = article.get("source") or "nyt"
+            title = _title_key(article["headline"])
+            if source_counts.get(source, 0) >= SOURCE_CAPS.get(source, cap):
+                continue
+            if article["url"] in seen_urls or title in exact_titles:
+                continue
+            seen_urls.add(article["url"])
+            exact_titles.add(title)
+            source_counts[source] = source_counts.get(source, 0) + 1
+            unique.append(article)
+            if len(unique) >= min(cap, MIN_TIMELINE_POINTS):
+                break
     return sorted(unique, key=lambda a: a["pub_date"])
 
 

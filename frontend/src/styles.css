@@ -622,6 +622,18 @@ h2 { position: relative; z-index: 1; margin: 8px 0 18px; font-size: clamp(20px, 
   justify-content: space-between; gap: 18px; margin-bottom: 22px;
 }
 .conclusion-heading h2 { margin-bottom: 0; }
+.conclusion-answer {
+  position: relative;
+  z-index: 1;
+  margin: 18px 0 22px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.conclusion-answer span { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+.conclusion-answer p { margin: 7px 0 0; color: var(--text); font-size: 15px; font-weight: 650; line-height: 1.55; }
 .conclusion-status {
   flex: none; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: 999px;
   background: var(--wash); color: var(--accent); font-size: 9px; font-weight: 700;

@@ -42,6 +42,18 @@ class CombinedEvidenceTests(unittest.TestCase):
             self.event - timedelta(days=10), self.event + timedelta(days=2))
         self.assertEqual([a["headline"] for a in selected], [relevant["headline"]])
 
+    def test_yahoo_related_ticker_metadata_can_fill_minimum_timeline(self):
+        items = []
+        for index in range(12):
+            item = self.article("yahoo", index, f"Semiconductor industry update {index}")
+            item["snippet"] = "Industry reporting without a ticker in the visible text."
+            item["related_tickers"] = ["NVDA"]
+            items.append(item)
+        selected = news.select_evidence(
+            items, self.event, "NVDA", "NVIDIA Corporation",
+            self.event - timedelta(days=10), self.event + timedelta(days=2))
+        self.assertGreaterEqual(len(selected), news.MIN_TIMELINE_POINTS)
+
     def test_near_duplicate_headlines_collapse(self):
         first = self.article("nyt", 1, "Nvidia reports record quarterly profit")
         second = self.article("yahoo", 2, "Nvidia reports record quarterly profits")

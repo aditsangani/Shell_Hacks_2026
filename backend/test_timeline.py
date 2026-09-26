@@ -89,6 +89,8 @@ class TimelineTests(unittest.TestCase):
         result = self.build()
         self.assertEqual(result['events'], [])
         self.assertEqual(len(result['candidates']), 1)
+        self.assertEqual(result['minimum_points'], 10)
+        self.assertFalse(result['has_minimum_points'])
         self.assertNotIn('triage_note', result)
 
     @patch.object(timeline, 'missing_chunks', return_value=0)

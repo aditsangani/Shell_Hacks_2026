@@ -27,6 +27,11 @@ export default function Conclusion({ conclusion, timelineError }) {
         </span>
       </div>
 
+      <div className="conclusion-answer">
+        <span>Answer</span>
+        <p>{displayed.answer}</p>
+      </div>
+
       <div className="conclusion-points">
         <div><span>Size of move</span><p>{displayed.move}</p></div>
         <div><span>Market context</span><p>{displayed.market_context}</p></div>

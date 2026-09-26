@@ -229,6 +229,8 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
   const sampled = showSampled || tl.events.length === 0
   const visibleEvents = sampled ? (tl.candidates || []) : tl.events
   const selectedEvent = visibleEvents.find(e => e.ref === selected?.ref && e.url === selected?.url)
+  const minimumPoints = tl.minimum_points ?? 10
+  const waitingForMinimum = tl.warming && tl.pool_size < minimumPoints
 
   return (
     <div className="page">
@@ -252,7 +254,9 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
         <div className="tl-progress" role="status">
           <span className="tl-spin" aria-hidden="true" />
           <span>
-            Sampling NYT, Yahoo Finance, and SEC evidence in the background
+            {waitingForMinimum
+              ? `Loading at least ${minimumPoints} evidence points from NYT, Yahoo Finance, and SEC`
+              : 'Sampling NYT, Yahoo Finance, and SEC evidence in the background'}
             {tl.pending_requests > 0 && <> — {tl.pending_requests} request{tl.pending_requests === 1 ? '' : 's'} left</>}
             {tl.pending_requests > 0
               ? '. NYT is rate-limited, so archival sampling may take a few minutes.'
@@ -316,11 +320,11 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
                 {showSampled ? 'Show AI-selected evidence' : 'Browse all sampled coverage'}
               </button>
             )}
-            {visibleEvents.length > 0 && (
+            {visibleEvents.length > 0 && !waitingForMinimum && (
               <>
                 {tl.cause_conclusion && (
                   <div className="tl-conclusion">
-                    <b>Timing conclusion</b>
+                    <b>Best-supported answer</b>
                     <span>{tl.cause_conclusion}</span>
                   </div>
                 )}

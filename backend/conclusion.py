@@ -111,6 +111,36 @@ def _history_reading(inv: dict) -> str:
     return "Comparable prior moves do not yet have enough forward data for an outcome summary."
 
 
+def _best_answer(inv: dict, evidence: dict | None, verdict: dict) -> str:
+    """Give one direct answer while staying inside what the evidence can support."""
+    symbol = inv["symbol"]
+    move_pct = float(inv["move"]["move_pct"])
+    direction = "rose" if move_pct >= 0 else "fell"
+    pressure = "buying" if move_pct >= 0 else "selling"
+    events = (evidence or {}).get("events") or []
+    catalysts = [event for event in events if event.get("can_explain_move")]
+    if catalysts:
+        rank = {"high": 0, "medium": 1, "low": 2}
+        lead = min(catalysts, key=lambda event: rank.get(event.get("significance"), 3))
+        headline = (lead.get("headline") or "the leading event published during the catalyst window")
+        return (f"{symbol} {direction} primarily because investors reacted to “{headline},” "
+                "the highest-ranked evidence published inside the catalyst window.")
+
+    label = verdict.get("verdict")
+    if label == "market_wide":
+        return (f"{symbol} {direction} mainly because the broader market moved the stock through "
+                f"its normal beta exposure; the market model explains most of the {move_pct:+.2f}% move.")
+    if label == "mixed":
+        return (f"{symbol} {direction} because broad-market movement and stock-specific {pressure} "
+                "both contributed, with neither factor dominating the beta-adjusted decomposition.")
+    if label == "flat":
+        return (f"{symbol} was effectively flat because buying and selling pressure balanced out; "
+                "the session did not contain a material directional move.")
+    return (f"{symbol} {direction} because stock-specific {pressure} pressure dominated the session. "
+            "No timely published catalyst was identified, so the best-supported explanation is "
+            "company-specific positioning or order flow rather than the broader market.")
+
+
 def build(inv: dict, evidence: dict | None = None) -> dict:
     """Return a deterministic synthesis; no model or network call is made here."""
     verdict = evidence.get("verdict") if evidence else None
@@ -120,6 +150,7 @@ def build(inv: dict, evidence: dict | None = None) -> dict:
     label = verdict.get("label", "Mixed").lower()
     return {
         "title": f"{strength.capitalize()} move with a {label} classification",
+        "answer": _best_answer(inv, evidence, verdict),
         "move": move,
         "market_context": _market_reading(inv, verdict),
         "evidence": evidence_text,

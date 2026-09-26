@@ -50,6 +50,7 @@ class DeterministicConclusionTests(unittest.TestCase):
         self.assertEqual(result["evidence_status"], "possible_catalyst")
         self.assertIn("does not establish", result["evidence"])
         self.assertEqual(result["method"], "computed")
+        self.assertIn("primarily because investors reacted", result["answer"])
 
     def test_later_only_coverage_is_not_called_a_catalyst(self):
         evidence = {
@@ -71,6 +72,7 @@ class DeterministicConclusionTests(unittest.TestCase):
         result = conclusion.build(investigation_fixture(), evidence)
         self.assertEqual(result["evidence_status"], "untriaged")
         self.assertIn("No claim", result["evidence"])
+        self.assertIn("stock-specific buying pressure", result["answer"])
 
     def test_historical_summary_uses_median_and_sample_size(self):
         result = conclusion.build(investigation_fixture(), {"verdict": verdict(), "pool_size": 0})

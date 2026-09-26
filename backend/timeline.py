@@ -37,12 +37,13 @@ CACHE_DIR = Path(__file__).parent / ".cache"
 
 SCOPES = {"stock": "Stock-specific", "sector": "Sector-wide", "market": "Market-wide"}
 MAX_ARTICLES_IN_PROMPT = news.COMBINED_ARTICLE_CAP
+MIN_TIMELINE_POINTS = news.MIN_TIMELINE_POINTS
 SNIPPET_CHARS = 260
 # After a triage attempt fails (usually a spent daily quota), leave it alone for a while
 # instead of retrying on every page load.
 TRIAGE_RETRY_COOLDOWN = 600  # seconds
 TIMING_SCHEMA_VERSION = 3
-EVIDENCE_POOL_VERSION = 2
+EVIDENCE_POOL_VERSION = 3
 
 TIMING_LABELS = {
     "background": "Background before the catalyst window",
@@ -557,6 +558,8 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         "verdict": verdict,
         "against_market": verdict["against_market"],
         "pool_size": len(pool),
+        "minimum_points": MIN_TIMELINE_POINTS,
+        "has_minimum_points": len(pool) >= MIN_TIMELINE_POINTS,
         "source_counts": {
             source: sum(a.get("source") == source for a in pool)
             for source in ("nyt", "yahoo", "sec")
@@ -589,6 +592,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         else:
             payload["caveat"] = "No relevant evidence was found across NYT, Yahoo Finance, or SEC EDGAR."
         payload["conclusion"] = conclusion.build(inv, payload)
+        payload["cause_conclusion"] = payload["conclusion"]["answer"]
         return payload
 
     if triaged is None:
@@ -603,6 +607,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
             "Relevance triage must finish before drawing a conclusion about possible catalysts."
         )
         payload["conclusion"] = conclusion.build(inv, payload)
+        payload["cause_conclusion"] = payload["conclusion"]["answer"]
         return payload
 
     timed_pool = _timed_articles(pool, inv)
@@ -690,6 +695,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
                                    f"beta-adjusted decomposition ({verdict['share'] * 100:.0f}% "
                                    f"idiosyncratic) is shown above. " + payload["verdict_note"])
     payload["conclusion"] = conclusion.build(inv, payload)
+    payload["cause_conclusion"] = payload["conclusion"]["answer"]
     return payload
 
 
