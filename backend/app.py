@@ -200,11 +200,13 @@ def warm_timeline():
     """Start a background warm and return immediately."""
     try:
         symbol, mode, _refresh = _args()
+        inv = _investigation(symbol, mode, refresh=False)
+        todo = timeline.missing_chunks(_event_date(inv), symbol, mode, inv["company"])
+        started = timeline.start_warm(symbol, mode, inv, log=app.logger.info)
     except ValueError as e:
         return jsonify({"error": scrub(e)}), 400
-    inv = _investigation(symbol, mode, refresh=False)
-    todo = timeline.missing_chunks(_event_date(inv), symbol, mode, inv["company"])
-    started = timeline.start_warm(symbol, mode, inv, log=app.logger.info)
+    except Exception as e:
+        return jsonify({"error": scrub(e)}), 502
     return jsonify({"ok": True, "started": started, "pending_requests": todo,
                     "job": timeline.job_state(symbol, mode)})
 

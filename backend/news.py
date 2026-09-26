@@ -207,7 +207,7 @@ def _sample_nyt_articles(event: date, mode: str, symbol: str, company: str = "",
                 cached += 1
                 for a in hit:
                     by_url.setdefault(a["url"], a)
-                if not hit:
+                if len(hit) < 10:
                     break  # chunk exhausted; no point asking for later pages
                 continue
             if calls >= budget:

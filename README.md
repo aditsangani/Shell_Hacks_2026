@@ -153,9 +153,15 @@ surfaced instead of silently swapping the verdict.
 - **SEC EDGAR** — no key; set `SEC_USER_AGENT` to identify the app, as SEC guidance requests.
 - **Gemini free tier** — **20 requests/day.** One timeline triage is one request.
 
-When Gemini's quota is spent, untriaged search results are withheld rather than presented as
-evidence; the verdict is still computed from prices. Failed triage is not retried for 10
-minutes, so an exhausted quota does not turn every page load into another doomed call.
+When Gemini is unavailable or selects no articles, the timeline still lets users browse
+sampled coverage, clearly marked **unreviewed**. These items are separate from AI-selected
+evidence and never count as established catalysts in the conclusion. The verdict is still
+computed from prices. Triage uses bounded requests and the configured fallback model.
+Incomplete sampling and failed triage wait 10 minutes before automatic retry (including
+across backend restarts); **Re-sample** explicitly retries. Cached AI citations are tied to
+the exact article pool, so a changed pool cannot silently reuse a different article's ID.
+
+Regression checks: `python -m unittest discover -s backend -p 'test_*.py'`.
 
 ## Run locally
 

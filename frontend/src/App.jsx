@@ -58,6 +58,8 @@ export default function App() {
   const [warming, setWarming] = useState(false)
   const [activeSection, setActiveSection] = useState('unusualness')
   const audioRef = useRef(null)
+  const investigationRequest = useRef(0)
+  const timelineRequest = useRef(0)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -73,12 +75,34 @@ export default function App() {
     [route?.symbol, route?.mode]
   )
 
+  const loadTimeline = useCallback(async (refresh = false) => {
+    const requestId = ++timelineRequest.current
+    setTlError(null)
+    try {
+      const query = params()
+      if (refresh) query.set('refresh', '1')
+      const r = await fetch(`/api/timeline?${query}`)
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
+      if (requestId === timelineRequest.current) setTl(body)
+    } catch (e) {
+      if (requestId === timelineRequest.current) setTlError(e.message)
+    } finally {
+      if (requestId === timelineRequest.current) setTlLoading(false)
+    }
+  }, [params])
+
   const load = useCallback(async (refresh = false) => {
+    const requestId = ++investigationRequest.current
+    ++timelineRequest.current
     setLoading(true)
+    setTlLoading(true)
     setError(null)
+    setTlError(null)
+    setTl(null)
     setInv(null)
     audioRef.current?.pause()
-    audioRef.current = null // otherwise the next ticker replays the previous briefing
+    audioRef.current = null
     setVoice('idle')
     try {
       const query = params()
@@ -86,42 +110,37 @@ export default function App() {
       const r = await fetch(`/api/investigation?${query}`)
       const body = await r.json()
       if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
+      if (requestId !== investigationRequest.current) return
       setInv(body)
+      // Reuse the completed investigation on the server instead of racing two price fetches.
+      await loadTimeline(refresh)
     } catch (e) {
-      setError(e.message)
+      if (requestId === investigationRequest.current) {
+        setError(e.message)
+        setTlError(e.message)
+        setTlLoading(false)
+      }
     } finally {
-      setLoading(false)
+      if (requestId === investigationRequest.current) setLoading(false)
     }
-  }, [params])
+  }, [params, loadTimeline])
 
-  const loadTimeline = useCallback(async () => {
-    setTlLoading(true)
-    setTlError(null)
-    try {
-      const r = await fetch(`/api/timeline?${params()}`)
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
-      setTl(body)
-    } catch (e) {
-      setTlError(e.message)
-    } finally {
-      setTlLoading(false)
-    }
-  }, [params])
-
-  // A cold warm runs on the server (~5 req/min, so up to a minute). Poll instead of
-  // blocking, and stop as soon as the server says the job has settled.
+  // Keep the existing timeline visible during polling; schedule only after the last
+  // response, so slow requests cannot overlap or overwrite a newer ticker's results.
   useEffect(() => {
-    if (!tl?.warming) return
-    const id = setInterval(loadTimeline, 2500)
-    return () => clearInterval(id)
-  }, [tl?.warming, loadTimeline])
+    if (!tl?.warming || tlError) return
+    const id = setTimeout(() => loadTimeline(), 2500)
+    return () => clearTimeout(id)
+  }, [tl, tlError, loadTimeline])
 
   useEffect(() => {
-    if (!route) return
+    if (!route?.symbol) return
     load()
-    loadTimeline()
-  }, [route, load, loadTimeline])
+    return () => {
+      ++investigationRequest.current
+      ++timelineRequest.current
+    }
+  }, [route?.symbol, route?.mode, load])
 
   useEffect(() => {
     if (!inv || route?.view !== 'investigation') return
@@ -191,15 +210,8 @@ export default function App() {
 
   async function warmTimeline() {
     setWarming(true)
-    setTlError(null)
     try {
-      const r = await fetch(`/api/timeline/warm?${params()}`, { method: 'POST' })
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
-      setTl(null)
-      await loadTimeline()
-    } catch (e) {
-      setTlError(e.message)
+      await loadTimeline(true)
     } finally {
       setWarming(false)
     }
@@ -320,6 +332,7 @@ export default function App() {
   if (route.view === 'timeline') {
     return (
       <Timeline
+        key={`${route.symbol}:${route.mode}`}
         tl={tl}
         loading={tlLoading}
         error={tlError}

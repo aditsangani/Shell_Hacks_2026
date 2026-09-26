@@ -6,6 +6,7 @@ const SCOPE = {
   stock: { label: 'Stock-specific', color: 'var(--series-1)', lane: 'up', blurb: 'about this company' },
   sector: { label: 'Sector-wide', color: 'var(--series-2)', lane: 'up', blurb: 'about its sector' },
   market: { label: 'Market-wide', color: 'var(--series-3)', lane: 'down', blurb: 'about the market' },
+  unreviewed: { label: 'Unreviewed coverage', color: 'var(--text-secondary)', lane: 'up' },
 }
 const TIMING = {
   background: { label: 'Background', tone: 'background' },
@@ -13,7 +14,16 @@ const TIMING = {
   intraday_catalyst: { label: 'Possible intraday catalyst', tone: 'catalyst' },
   reaction: { label: 'Post-session context', tone: 'reaction' },
 }
-const RADIUS = { high: 7, medium: 5, low: 3.5 }
+function timingFor(event) {
+  const timing = TIMING[event.timing_role]
+  if (event.review_status !== 'unreviewed' || !timing) return timing
+  const label = {
+    premarket_catalyst: 'Published before the open',
+    intraday_catalyst: 'Published during the session',
+  }[event.timing_role]
+  return label ? { label, tone: 'background' } : timing
+}
+const RADIUS = { high: 7, medium: 5, low: 3.5, unranked: 5 }
 const W = 1000
 const PAD = 28
 const AXIS_Y = 150
@@ -35,11 +45,12 @@ function layout(events, xOf) {
     // Stack upward in the top lane, downward in the bottom one.
     const step = taken.length % 3
     let x = xOf(e.pub_date)
+    const direction = x > W / 2 ? -1 : 1
     const y = lane === 'up' ? AXIS_Y - 34 - step * 15 : AXIS_Y + 34 + step * 15
     // Nudge right while colliding with something already in this lane.
     let guard = 0
     while (taken.some((p) => Math.abs(p.x - x) < 11 && Math.abs(p.y - y) < 11) && guard < 40) {
-      x += 11
+      x += direction * 11
       guard += 1
     }
     taken.push({ x, y })
@@ -78,17 +89,17 @@ function Plot({ tl, selected, onSelect }) {
     const f = (t - t0) / Math.max(1, t1 - t0)
     return PAD + f * (W - PAD * 2)
   }
-  const dots = useMemo(() => layout(events, xOf), [events])
+  const dots = useMemo(() => layout(events, xOf), [events, win.begin, win.end])
   const ticks = useMemo(() => axisTicks(win.begin, win.end), [win.begin, win.end])
   const evX = xOf(eventDate)
   const move = tl.move_pct
 
   return (
     <div className="tl-plot-wrap">
-      <svg className="tl-plot" viewBox={`0 0 ${W} 250`} role="img"
-        aria-label={`Timeline of ${events.length} selected articles from ${longDate(win.begin)} to ${longDate(win.end)}, with the investigated session on ${longDate(eventDate)} marked.`}>
+      <svg className="tl-plot" viewBox={`0 0 ${W} 300`} role="group"
+        aria-label={`Timeline of ${events.length} articles from ${longDate(win.begin)} to ${longDate(win.end)}, with the investigated session on ${longDate(eventDate)} marked.`}>
         {/* lanes */}
-        <text x={PAD} y={AXIS_Y - 78} className="tl-lane-label">Company &amp; sector news</text>
+        <text x={PAD} y={AXIS_Y - 78} className="tl-lane-label">{events.some(e => e.scope === 'unreviewed') ? 'Sampled coverage · relevance unreviewed' : 'Company & sector news'}</text>
         <text x={PAD} y={AXIS_Y + 78} className="tl-lane-label">Market news</text>
         <line x1={PAD} x2={W - PAD} y1={AXIS_Y - 84} y2={AXIS_Y - 84} className="tl-lane-rule" />
         <line x1={PAD} x2={W - PAD} y1={AXIS_Y + 84} y2={AXIS_Y + 84} className="tl-lane-rule" />
@@ -108,12 +119,20 @@ function Plot({ tl, selected, onSelect }) {
           points={`${evX},${AXIS_Y + 96} ${evX - 7},${AXIS_Y + 110} ${evX + 7},${AXIS_Y + 110}`}
           className="tl-event-mark"
         />
-        <text x={evX} y={AXIS_Y + 126} className="tl-event-label" textAnchor="middle">
+        <text x={evX} y={AXIS_Y + 126} className="tl-event-label" textAnchor={evX > W - 200 ? 'end' : evX < 200 ? 'start' : 'middle'}>
           {longDate(eventDate)} · {move > 0 ? '+' : ''}{move?.toFixed(2)}%
         </text>
 
         {dots.map((d) => (
           <g key={d.ref} className={selected?.ref === d.ref ? 'tl-dot on' : 'tl-dot'}
+            role="button" tabIndex={0} aria-label={`${d.headline}, ${etTime(d.pub_date)}`}
+            aria-pressed={selected?.ref === d.ref}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onSelect(selected?.ref === d.ref ? null : d)
+              }
+            }}
             onClick={() => onSelect(selected?.ref === d.ref ? null : d)}>
             <circle cx={d.x} cy={d.y} r={RADIUS[d.significance] + 7} fill="transparent" />
             <circle cx={d.x} cy={d.y} r={RADIUS[d.significance]} fill={SCOPE[d.scope]?.color ?? 'var(--series-1)'} />
@@ -122,11 +141,11 @@ function Plot({ tl, selected, onSelect }) {
       </svg>
 
       <div className="tl-legend">
-        {Object.entries(SCOPE).map(([k, v]) => (
+        {Object.entries(SCOPE).filter(([k]) => events.some(e => e.scope === k)).map(([k, v]) => (
           <span key={k}><span className="swatch" style={{ background: v.color }} />{v.label}</span>
         ))}
         <span className="tl-legend-sep" />
-        <span>Dot size = significance · click a dot for detail</span>
+        <span>{events.some(e => e.scope === 'unreviewed') ? 'Relevance has not been assessed' : 'Dot size = significance'} · select a dot for detail</span>
       </div>
     </div>
   )
@@ -159,7 +178,7 @@ function Verdict({ tl }) {
 
 function EventCard({ e, onClose }) {
   const s = SCOPE[e.scope] ?? SCOPE.stock
-  const timing = TIMING[e.timing_role]
+  const timing = timingFor(e)
   return (
     <div className="tl-detail" style={{ borderLeftColor: s.color }}>
       <button className="tl-close" onClick={onClose} aria-label="Close detail">×</button>
@@ -168,7 +187,7 @@ function EventCard({ e, onClose }) {
         <span className="chip" style={{ marginLeft: 0, background: s.color, color: '#fff' }}>{s.label}</span>
         <span className="chip" style={{ marginLeft: 0 }}>{e.publisher ?? e.source}</span>
         {timing && <span className={`chip timing-chip ${timing.tone}`}>{timing.label}</span>}
-        <span className="chip" style={{ marginLeft: 0 }}>{e.significance} significance</span>
+        <span className="chip" style={{ marginLeft: 0 }}>{e.significance === 'unranked' ? 'Not ranked by AI' : `${e.significance} significance`}</span>
         <span className="tl-detail-date">{etTime(e.pub_date)}</span>
       </div>
       <a className="tl-detail-headline" href={e.url} target="_blank" rel="noreferrer">{e.headline}</a>
@@ -181,15 +200,16 @@ function EventCard({ e, onClose }) {
 
 export default function Timeline({ tl, loading, error, onWarm, warming, onBack, theme, onToggleTheme }) {
   const [selected, setSelected] = useState(null)
+  const [showSampled, setShowSampled] = useState(false)
 
-  if (error) {
+  if (error && !tl) {
     return (
       <div className="page">
         <div className="toolbar">
           <button className="ghost" onClick={onBack}>← Back to the investigation</button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         </div>
-        <div className="card"><p className="error">{error}</p></div>
+        <div className="card"><p className="error">{error}</p><button onClick={onWarm} disabled={warming}>Retry timeline</button></div>
       </div>
     )
   }
@@ -206,6 +226,9 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
   }
 
   const counts = tl.events.reduce((a, e) => ({ ...a, [e.scope]: (a[e.scope] ?? 0) + 1 }), {})
+  const sampled = showSampled || tl.events.length === 0
+  const visibleEvents = sampled ? (tl.candidates || []) : tl.events
+  const selectedEvent = visibleEvents.find(e => e.ref === selected?.ref && e.url === selected?.url)
 
   return (
     <div className="page">
@@ -220,6 +243,11 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
       </div>
 
+      {error && <div className="card" role="alert">
+        <p className="error">Could not update the timeline: {error}</p>
+        <button onClick={onWarm} disabled={warming}>Retry update</button>
+      </div>}
+
       {tl.warming && (
         <div className="tl-progress" role="status">
           <span className="tl-spin" aria-hidden="true" />
@@ -227,7 +255,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
             Sampling NYT, Yahoo Finance, and SEC evidence in the background
             {tl.pending_requests > 0 && <> — {tl.pending_requests} request{tl.pending_requests === 1 ? '' : 's'} left</>}
             {tl.pending_requests > 0
-              ? '. NYT is rate-limited to 5/min, so this can take under a minute.'
+              ? '. NYT is rate-limited, so archival sampling may take a few minutes.'
               : '. The page updates itself.'}
           </span>
         </div>
@@ -238,7 +266,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
         <h2>{tl.company} · {tl.event_label}</h2>
         <p className="sub">
           {tl.pool_size} evidence item{tl.pool_size === 1 ? '' : 's'} sampled across the{' '}
-          {tl.window.label} before the session{window_tail(tl)}.
+          {tl.window.label} around the session{window_tail(tl)}.
           {tl.triage_note
             ? ' Relevance classification is pending.'
             : ` Gemini kept ${tl.events.length} as bearing on the move.`}
@@ -255,39 +283,40 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
             <p className="loading">
               {tl.warming
                 ? 'Sampling in the background…'
-                : <>No evidence sampled yet. Gemini is required for triage; an NYT key adds archival coverage.</>}
+                : <>No coverage was returned for this window. You can retry the sources below.</>}
             </p>
             <button className="primary" onClick={onWarm} disabled={warming}>
               {warming ? 'Sampling…' : 'Sample evidence now'}
             </button>
             <p className="caveat">
-              NYT archival coverage costs one rate-limited request per 6-month chunk
-              (up to {Math.max(1, Math.round(tl.window.days / 183))} requests), so this can take a
-              minute. Pre-warm it with <code>python ingest.py {tl.symbol} {tl.mode} --timeline</code>.
+              Sources load in the background. NYT archival sampling is rate-limited;
+              available coverage appears as it arrives.
             </p>
           </div>
         ) : (
           <>
             {(tl.quota_exhausted || tl.triage_note) && (
               <div className="tl-quota">
-                <b>Showing {tl.pool_size} articles, untriaged</b>
+                <b>Showing sampled coverage · AI review incomplete.</b>
                 {tl.triage_note ? ` ${tl.triage_note}` : ''}
-                {tl.mode && <> Re-run <code>ingest.py {tl.symbol} {tl.mode} --timeline</code> when
-                the quota resets.</>}
               </div>
             )}
             <Verdict tl={tl} />
             {!tl.triage_note && tl.events.length === 0 && (
               <div className="tl-empty-evidence" role="status">
-                <b>No relevant evidence to plot</b>
+                <b>No articles selected as explanations</b>
                 <span>
-                  News and filings were sampled, but none passed both the relevance and
-                  market-session timing checks for this move. The chart is hidden instead of
-                  displaying unrelated or post-session coverage.
+                  AI review did not select a plausible explanation. Sampled coverage remains
+                  available below for inspection; its presence does not establish a cause.
                 </span>
               </div>
             )}
-            {!tl.triage_note && tl.events.length > 0 && (
+            {tl.events.length > 0 && (tl.candidates || []).length > 0 && (
+              <button className="ghost" onClick={() => { setShowSampled(!showSampled); setSelected(null) }}>
+                {showSampled ? 'Show AI-selected evidence' : 'Browse all sampled coverage'}
+              </button>
+            )}
+            {visibleEvents.length > 0 && (
               <>
                 {tl.cause_conclusion && (
                   <div className="tl-conclusion">
@@ -295,9 +324,10 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
                     <span>{tl.cause_conclusion}</span>
                   </div>
                 )}
-                <Plot tl={tl} selected={selected} onSelect={setSelected} />
-                {selected
-                  ? <EventCard e={selected} onClose={() => setSelected(null)} />
+                {sampled && <p className="caveat">Unreviewed coverage: publication times are verified from source metadata; relevance and causation have not been established.</p>}
+                <Plot tl={{ ...tl, events: visibleEvents }} selected={selectedEvent} onSelect={setSelected} />
+                {selectedEvent
+                  ? <EventCard e={selectedEvent} onClose={() => setSelected(null)} />
                   : <p className="caveat">Select a dot to read the article and why it matters.</p>}
               </>
             )}
@@ -306,20 +336,20 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
         {tl.caveat && <p className="caveat">{tl.caveat}</p>}
       </section>
 
-      {tl.events.length > 0 && (
+      {visibleEvents.length > 0 && (
         <section className="card">
-          <div className="step">In date order</div>
+          <div className="step">{sampled ? 'Sampled coverage · unreviewed' : 'Selected evidence'} · In date order</div>
           <ul className="tl-list">
-            {tl.events.map((e) => (
+            {visibleEvents.map((e) => (
               <li key={e.ref} style={{ borderLeftColor: SCOPE[e.scope]?.color }}>
                 <div className="tl-list-meta">
                   <span className="chip" style={{ marginLeft: 0 }}>{e.ref}</span>
                   <span className="tl-list-date">{etTime(e.pub_date)}</span>
                   <span className="chip" style={{ marginLeft: 0, color: SCOPE[e.scope]?.color }}>{SCOPE[e.scope]?.label}</span>
                   <span className="chip" style={{ marginLeft: 0 }}>{e.publisher ?? e.source}</span>
-                  {TIMING[e.timing_role] && (
-                    <span className={`chip timing-chip ${TIMING[e.timing_role].tone}`}>
-                      {TIMING[e.timing_role].label}
+                  {timingFor(e) && (
+                    <span className={`chip timing-chip ${timingFor(e).tone}`}>
+                      {timingFor(e).label}
                     </span>
                   )}
                 </div>

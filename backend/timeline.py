@@ -16,6 +16,9 @@ should never sit through that. The UI polls until the job settles.
 """
 
 import json
+import hashlib
+import os
+import tempfile
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -27,7 +30,7 @@ from google.genai import types
 import market
 import news
 import conclusion
-from config import GEMINI_API_KEY, GEMINI_MODEL, scrub
+from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_FALLBACK_MODEL, scrub
 from language_guard import guard_report, guard_statement
 
 CACHE_DIR = Path(__file__).parent / ".cache"
@@ -122,7 +125,19 @@ def _read_json(path: Path):
 
 def _write_json(path: Path, blob) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(blob, indent=2))
+    # Polls must never see half a JSON document while a worker publishes progress.
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+        temporary = f.name
+        json.dump(blob, f, indent=2)
+    try:
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _pool_fingerprint(pool: list[dict]) -> str:
+    return hashlib.sha256(json.dumps(pool, sort_keys=True).encode()).hexdigest()
 
 
 # ----------------------------------------------------------------------- background
@@ -152,7 +167,7 @@ def missing_chunks(event, symbol: str, mode: str, company: str,
     """How many NYT requests a warm would still need. Cheap: disk reads only.
 
     Mirrors the sampler's stop conditions exactly. The important part is breaking on a
-    *cached empty page*: the sampler records one when a cell runs out of results, and a
+    *cached short page*: the sampler records one when a cell runs out of results, and a
     naive count that keeps asking for deeper pages would report pending work forever and
     re-trigger a warm that has nothing left to do.
     """
@@ -169,7 +184,7 @@ def missing_chunks(event, symbol: str, mode: str, company: str,
         for page in range(pages):
             hit = reusable.get((cell, page))
             if hit is not None:
-                if not hit:
+                if len(hit) < 10:
                     break  # this cell is exhausted; deeper pages would return nothing
                 continue
             n += 1
@@ -189,13 +204,29 @@ def _triage(inv: dict, pool: list[dict], verdict: dict, window_days: int) -> dic
         verdict=verdict["verdict"], verdict_share=f"{verdict['share'] * 100:.0f}%",
         **{**inv["move"], **inv["divergence"]},
     )
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    resp = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2),
-    )
-    return _finalize_triage(json.loads(resp.text), timed_pool)
+    client = genai.Client(api_key=GEMINI_API_KEY, http_options=types.HttpOptions(
+        timeout=20_000, retry_options=types.HttpRetryOptions(attempts=1)))
+    models = list(dict.fromkeys(m for m in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL) if m))
+    for index, model in enumerate(models):
+        try:
+            resp = client.models.generate_content(
+                model=model, contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2),
+            )
+            result = json.loads(resp.text)
+            if not isinstance(result, dict) or not isinstance(result.get("events"), list):
+                raise ValueError("Invalid timeline response: expected an events list")
+            if any(not isinstance(e, dict) for e in result["events"]):
+                raise ValueError("Invalid timeline event")
+            result = _finalize_triage(result, timed_pool)
+            result["pool_fingerprint"] = _pool_fingerprint(pool)
+            result["model"] = model
+            return result
+        except Exception as exc:
+            # Invalid keys cannot be repaired by changing models. Availability and model
+            # errors may be model-specific; make at most one attempt on each configured model.
+            if getattr(exc, "code", None) in (401, 403) or index == len(models) - 1:
+                raise
 
 
 def _run_warm(symbol: str, mode: str, inv: dict, log=print) -> None:
@@ -233,6 +264,8 @@ def _run_warm(symbol: str, mode: str, inv: dict, log=print) -> None:
         _set_job(symbol, mode, state="error", note=scrub(e)[:200])
     finally:
         _set_job(symbol, mode, finished=time.time())
+        _write_json(CACHE_DIR / f"warm_{symbol.upper()}_{event}_{mode}.json",
+                    job_state(symbol, mode))
 
 
 def start_warm(symbol: str, mode: str, inv: dict, log=print) -> bool:
@@ -241,7 +274,8 @@ def start_warm(symbol: str, mode: str, inv: dict, log=print) -> bool:
     with _job_lock:
         if _jobs.get(key, {}).get("state") == "running":
             return False
-        _jobs[key] = {"state": "running", "started": time.time()}
+        _jobs[key] = {"state": "running", "started": time.time(),
+                      "event_date": inv["event_date"]}
     threading.Thread(target=_run_warm, args=(symbol, mode, inv, log),
                      daemon=True, name=f"warm-{key}").start()
     return True
@@ -276,6 +310,8 @@ def warm_now(symbol: str, mode: str, inv: dict, log=print) -> dict:
         return {"pool_size": len(pool)}
     finally:
         _set_job(symbol, mode, finished=time.time())
+        _write_json(CACHE_DIR / f"warm_{symbol.upper()}_{event}_{mode}.json",
+                    job_state(symbol, mode))
 
 
 def collect(event, symbol: str, mode: str, company: str = "", log=print) -> list[dict]:
@@ -358,11 +394,14 @@ def classify_article_timing(pub_date: str, event_date: str,
 
 
 def _timed_articles(pool: list[dict], inv: dict) -> list[dict]:
-    return [
-        {**article, **classify_article_timing(
-            article["pub_date"], inv["event_date"], inv.get("prior_session_date"))}
-        for article in pool
-    ]
+    timed = []
+    for article in pool:
+        try:
+            timed.append({**article, **classify_article_timing(
+                article["pub_date"], inv["event_date"], inv.get("prior_session_date"))})
+        except (KeyError, TypeError, ValueError):
+            continue  # one malformed source timestamp must not break the entire timeline
+    return timed
 
 
 def _finalize_triage(triaged: dict, timed_pool: list[dict]) -> dict:
@@ -423,9 +462,9 @@ def _triage_failure(e: Exception) -> tuple[bool, str]:
     if any(m in text for m in _KEY_MARKERS) and not any(m in text for m in _QUOTA_MARKERS):
         return False, "Gemini rejected GEMINI_API_KEY. Check the key and that the model is enabled."
     if any(m in text for m in _QUOTA_MARKERS):
-        return True, ("Gemini is unavailable right now. The free tier allows 20 requests per "
-                      "day and this project has spent today's, or the model is under high "
-                      "load. Sampled items are withheld until relevance triage succeeds.")
+        return True, ("Gemini reported a rate limit or temporary unavailability. "
+                      "Sampled sources remain available as unreviewed coverage; "
+                      "they are not confirmed explanations for the move.")
     return False, f"Gemini call failed: {scrub(e)[:200]}"
 
 
@@ -441,9 +480,6 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
     begin, end = market.article_window(event, mode)
     window_days = (end - begin).days
     verdict = scope_verdict(inv["divergence"])
-
-    if refresh:
-        _set_job(symbol, mode, state="idle")
 
     pool_blob = _read_json(_pool_path(symbol, event, mode))
     pool_is_current = (isinstance(pool_blob, dict) and
@@ -463,9 +499,18 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         triaged = None
     if refresh or (pool and not pool_is_current):
         triaged = None
+    if triaged and triaged.get("pool_fingerprint") != _pool_fingerprint(pool):
+        triaged = None  # positional A1/A2 references must belong to this exact pool
 
     todo = missing_chunks(event, symbol, mode, inv["company"])
     job = job_state(symbol, mode)
+    if (job.get("event_date") not in (None, inv["event_date"])
+            and job.get("state") != "running"):
+        job = {}
+    if not job:
+        job = _read_json(CACHE_DIR / f"warm_{symbol.upper()}_{event}_{mode}.json") or {}
+        if job.get("state") == "running":
+            job = {}  # an interrupted CLI worker cannot still be running after restart
 
     def _should_warm() -> bool:
         """Only spend another request when there is genuinely something left to do.
@@ -474,24 +519,29 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         doomed triage: the job never settled, `warming` stayed true forever, and each page
         load burned another of the 20 daily calls.
         """
+        if job.get("state") == "running":
+            return False
         if refresh:
             return True
+        # Apply the cooldown BEFORE checking missing chunks. Rejected NYT requests and
+        # worker failures leave chunks missing and previously caused an endless warm loop.
+        if time.time() - job.get("finished", 0) < TRIAGE_RETRY_COOLDOWN:
+            return False
         if not pool_is_current:
             return True  # cold start or upgrade an old NYT-only pool to combined evidence
-        if todo > 0:
+        if todo > 0 and news.budget_remaining() > 0:
             return True  # sampling work remains
         if not (pool and triaged is None and GEMINI_API_KEY):
             return False  # nothing cached-and-untriaged to do
-        failed = job.get("state") == "done" and (job.get("quota_exhausted") or job.get("note"))
-        if failed and time.time() - job.get("finished", 0) < TRIAGE_RETRY_COOLDOWN:
-            return False
         return True
 
-    warming = job.get("state") == "running" or (todo > 0 and not pool)
+    warming = job.get("state") == "running"
     if _should_warm():
         warming = start_warm(symbol, mode, inv, log=log) or warming
     elif job.get("state") == "running":
         warming = True
+    if warming:
+        job = job_state(symbol, mode)
 
     payload = {
         "symbol": symbol,
@@ -517,6 +567,12 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         "nyt_budget": {"used": news.budget_state()["used"], "cap": news.NYT_SAFETY_CAP},
         "freshness": inv["freshness"],
         "events": [],
+        "candidates": [
+            {**a, "scope": "unreviewed", "significance": "unranked",
+             "can_explain_move": False, "review_status": "unreviewed",
+             "why": "Sampled coverage, not assessed as an explanation for this move."}
+            for a in _timed_articles(pool, inv)
+        ],
         "narrative": "",
         "cause_conclusion": "",
         "caveat": "",
