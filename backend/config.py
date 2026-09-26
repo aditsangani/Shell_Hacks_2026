@@ -99,6 +99,7 @@ def sector_for(symbol: str) -> tuple[str | None, str | None]:
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 NYT_API_KEY = os.getenv("NYT_API_KEY", "")
+SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "FinSight educational research app")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")

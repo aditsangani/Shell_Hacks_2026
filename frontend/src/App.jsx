@@ -246,7 +246,7 @@ export default function App() {
         </section>
 
         <p className="disclaimer">
-          Prices: Yahoo Finance · News: The New York Times · Explanations: Gemini.
+          Prices: Yahoo Finance · Evidence: NYT, Yahoo Finance News, SEC EDGAR · Explanations: Gemini.
           Historical observation only — not investment advice.
         </p>
       </div>
@@ -354,7 +354,7 @@ export default function App() {
               <div className="step">3 · What was published</div>
               <h2>Evidence timeline</h2>
               <p className="sub">
-                New York Times coverage sampled across the{' '}
+                News and SEC filings sampled across the{' '}
                 <b>{route.mode === 'unusual' ? '5 years' : '6 months'}</b> before this session,
                 triaged by Gemini into the articles that bear on the move — and whether the move
                 was stock-specific or market-wide.
@@ -366,7 +366,7 @@ export default function App() {
           </div>
 
           <p className="disclaimer">
-            Historical observation only — not investment advice. Prices: Yahoo Finance. News: The New York Times.
+            Historical observation only — not investment advice. Prices: Yahoo Finance. Evidence: NYT, Yahoo Finance News, and SEC EDGAR.
             Explanations: Gemini, grounded in the evidence shown.
           </p>
         </>

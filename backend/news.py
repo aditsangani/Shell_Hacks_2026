@@ -19,15 +19,18 @@ import json
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import pandas as pd
 import requests
+import yfinance as yf
 
 import db
 import market
-from config import NYT_API_KEY, scrub
+from config import MARKET_TZ, NYT_API_KEY, SEC_USER_AGENT, scrub
 
 NYT_URL = "https://api.nytimes.com/svc/search/v2/articlesearch.json"
 CACHE_DIR = Path(__file__).parent / ".cache"
@@ -40,6 +43,12 @@ NYT_SAFETY_CAP = 400  # stop here, well clear of the real cap
 NYT_PER_WARM_BUDGET = 6
 NYT_MAX_PAGES_PER_CHUNK = 3
 MAX_CHUNK = timedelta(days=365)  # coarser chunks = fewer requests
+
+COMBINED_ARTICLE_CAP = 60
+SOURCE_CAPS = {"nyt": 25, "yahoo": 25, "sec": 10}
+SUPPLEMENTAL_CACHE_TTL = 15 * 60
+SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 
 _budget_lock = threading.Lock()
 
@@ -159,12 +168,14 @@ def _fetch_nyt(query: str, begin: date, end: date, page: int = 0) -> list[dict]:
             "pub_date": pub,
             "url": d["web_url"],
             "snippet": d.get("abstract") or d.get("snippet") or "",
+            "source": "nyt",
+            "publisher": "The New York Times",
         })
     return out
 
 
-def sample_articles(event: date, mode: str, symbol: str, company: str = "",
-                    log=print, budget: int | None = None, on_progress=None) -> list[dict]:
+def _sample_nyt_articles(event: date, mode: str, symbol: str, company: str = "",
+                         log=print, budget: int | None = None, on_progress=None) -> list[dict]:
     """Collect a spread of articles across the mode's window, reusing cached chunks.
 
     Returns whatever it can get. Exhausted budget or a rate-limited chunk yields a partial
@@ -309,7 +320,7 @@ def fetch_and_store(event_date: date, symbol: str, company: str = "") -> list[di
     return articles
 
 
-def get_news(event_date: date, symbol: str, company: str = "") -> list[dict]:
+def _get_nyt_news(event_date: date, symbol: str, company: str = "") -> list[dict]:
     """Cached headlines for the event window; hits the NYT API only on a cold cache."""
     if db.ENABLED:
         try:
@@ -335,3 +346,310 @@ def get_news(event_date: date, symbol: str, company: str = "") -> list[dict]:
 
 def _cache_path(symbol: str, event_date: date) -> Path:
     return CACHE_DIR / f"news_{symbol.upper()}_{event_date.isoformat()}.json"
+
+
+# -------------------------------------------------------- supplemental evidence
+
+def _normalise_article(article: dict, source: str = "nyt") -> dict | None:
+    pub = _to_utc_iso(article.get("pub_date") or "")
+    headline = " ".join(str(article.get("headline") or "").split())
+    url = str(article.get("url") or "").strip()
+    if not pub or not headline or not url:
+        return None
+    return {
+        **article,
+        "headline": headline,
+        "pub_date": pub,
+        "url": url,
+        "snippet": " ".join(str(article.get("snippet") or "").split()),
+        "source": article.get("source") or source,
+        "publisher": article.get("publisher") or {
+            "nyt": "The New York Times", "yahoo": "Yahoo Finance", "sec": "U.S. SEC",
+        }.get(source, source),
+    }
+
+
+def _yahoo_article(item: dict) -> dict | None:
+    content = item.get("content") if isinstance(item.get("content"), dict) else item
+    title = content.get("title") or item.get("title")
+    published = content.get("pubDate") or content.get("displayTime")
+    if not published and item.get("providerPublishTime"):
+        published = pd.Timestamp(item["providerPublishTime"], unit="s", tz="UTC").isoformat()
+    canonical = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
+    url = canonical.get("url") if isinstance(canonical, dict) else canonical
+    url = url or content.get("link") or item.get("link")
+    provider = content.get("provider") or {}
+    publisher = (provider.get("displayName") if isinstance(provider, dict) else None)
+    publisher = publisher or item.get("publisher") or "Yahoo Finance"
+    related = item.get("relatedTickers") or content.get("relatedTickers") or []
+    return _normalise_article({
+        "headline": title,
+        "pub_date": published,
+        "url": url,
+        "snippet": content.get("summary") or content.get("description") or "",
+        "source": "yahoo",
+        "publisher": publisher,
+        "related_tickers": related,
+        "kind": "news",
+    }, "yahoo")
+
+
+def _fetch_yahoo_news(symbol: str, company: str) -> list[dict]:
+    by_url: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        ticker_future = executor.submit(yf.Ticker(symbol).get_news, count=60, tab="all")
+        search_future = executor.submit(
+            lambda: yf.Search(
+                short_company(company) or symbol,
+                max_results=1, news_count=60, lists_count=0,
+                include_nav_links=False, include_research=False, include_cultural_assets=False,
+                raise_errors=False,
+            ).news)
+        ticker_items = ticker_future.result() or []
+        search_items = search_future.result() or []
+    for item in [*ticker_items, *search_items]:
+        article = _yahoo_article(item)
+        if article:
+            by_url.setdefault(article["url"], article)
+    return list(by_url.values())
+
+
+def _sec_headers() -> dict:
+    return {"User-Agent": SEC_USER_AGENT, "Accept-Encoding": "gzip, deflate"}
+
+
+def _sec_ticker_map() -> dict[str, str]:
+    path = CACHE_DIR / "sec_company_tickers.json"
+    fresh = path.exists() and time.time() - path.stat().st_mtime < 24 * 60 * 60
+    try:
+        blob = json.loads(path.read_text()) if fresh else None
+    except (OSError, ValueError):
+        blob = None
+    if blob is None:
+        response = requests.get(SEC_TICKERS_URL, headers=_sec_headers(), timeout=20)
+        response.raise_for_status()
+        blob = response.json()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(blob))
+    return {
+        str(row.get("ticker") or "").upper(): str(row.get("cik_str") or "").zfill(10)
+        for row in blob.values()
+        if row.get("ticker") and row.get("cik_str") is not None
+    }
+
+
+def _sec_cik(symbol: str) -> str | None:
+    """Resolve CIK from Yahoo filing metadata, then fall back to SEC's ticker map.
+
+    Some networks block www.sec.gov/files while allowing data.sec.gov. Yahoo's filing URL
+    includes the registrant CIK, so the submissions API can still be used directly.
+    """
+    try:
+        for filing in yf.Ticker(symbol).get_sec_filings() or []:
+            match = re.search(r"_(\d+)(?:\?.*)?$", str(filing.get("edgarUrl") or ""))
+            if match:
+                return match.group(1).zfill(10)
+    except Exception:
+        pass
+    try:
+        return _sec_ticker_map().get(symbol.upper())
+    except Exception:
+        return None
+
+
+_MATERIAL_FORMS = {"8-K", "8-K/A", "10-Q", "10-Q/A", "10-K", "10-K/A",
+                   "6-K", "6-K/A", "20-F", "20-F/A", "DEF 14A", "S-1", "S-3"}
+
+
+def _fetch_sec_filings(symbol: str, company: str) -> list[dict]:
+    cik = _sec_cik(symbol)
+    if not cik:
+        return []
+    response = requests.get(SEC_SUBMISSIONS_URL.format(cik=cik),
+                            headers=_sec_headers(), timeout=20)
+    response.raise_for_status()
+    recent = (response.json().get("filings") or {}).get("recent") or {}
+    keys = ("accessionNumber", "filingDate", "acceptanceDateTime", "reportDate", "form",
+            "primaryDocument", "primaryDocDescription")
+    rows = [dict(zip(keys, values)) for values in zip(*(recent.get(k) or [] for k in keys))]
+    out = []
+    for row in rows:
+        form = row.get("form") or ""
+        document = row.get("primaryDocument") or ""
+        accession = row.get("accessionNumber") or ""
+        if form not in _MATERIAL_FORMS or not document or not accession:
+            continue
+        accepted = row.get("acceptanceDateTime") or row.get("filingDate")
+        try:
+            stamp = pd.Timestamp(accepted)
+            if stamp.tzinfo is None:
+                stamp = stamp.tz_localize(MARKET_TZ)
+            published = stamp.tz_convert("UTC").isoformat()
+        except (ValueError, TypeError):
+            continue
+        accession_path = accession.replace("-", "")
+        description = row.get("primaryDocDescription") or ""
+        report_date = row.get("reportDate") or ""
+        article = _normalise_article({
+            "headline": f"{company or symbol} filed {form}"
+                        + (f": {description}" if description else ""),
+            "pub_date": published,
+            "url": (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                    f"{accession_path}/{document}"),
+            "snippet": (f"Official {form} filing accepted by the SEC."
+                        + (f" Reporting period: {report_date}." if report_date else "")),
+            "source": "sec",
+            "publisher": "U.S. SEC",
+            "kind": "filing",
+            "form": form,
+        }, "sec")
+        if article:
+            out.append(article)
+    return out
+
+
+def _supplemental_path(symbol: str, event: date) -> Path:
+    return CACHE_DIR / f"evidence_{symbol.upper()}_{event.isoformat()}.json"
+
+
+def supplemental_articles(event: date, symbol: str, company: str, log=print) -> list[dict]:
+    """Yahoo reporting plus primary SEC filings, cached independently of the NYT quota."""
+    path = _supplemental_path(symbol, event)
+    fresh = path.exists() and time.time() - path.stat().st_mtime < SUPPLEMENTAL_CACHE_TTL
+    if fresh:
+        try:
+            blob = json.loads(path.read_text())
+            if isinstance(blob, dict) and blob.get("schema") == 1:
+                return blob.get("articles") or []
+        except (OSError, ValueError):
+            pass
+
+    articles = []
+    fetchers = {
+        "Yahoo Finance": lambda: _fetch_yahoo_news(symbol, company),
+        "SEC EDGAR": lambda: _fetch_sec_filings(symbol, company),
+    }
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(fetcher): source for source, fetcher in fetchers.items()}
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                found = future.result()
+                articles.extend(found)
+                log(f"  evidence: {len(found)} item(s) from {source}")
+            except Exception as exc:
+                log(f"  evidence: {source} unavailable — {_scrub(exc)[:140]}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema": 1, "articles": articles}, indent=2))
+    return articles
+
+
+def _title_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _article_score(article: dict, event: date, symbol: str, company: str) -> float:
+    text = f"{article.get('headline', '')} {article.get('snippet', '')}".lower()
+    short = short_company(company).lower()
+    tokens = [t for t in re.findall(r"[a-z0-9]+", short) if len(t) >= 3]
+    score = 12.0 if article.get("source") == "sec" else 0.0
+    if re.search(rf"\b{re.escape(symbol.lower())}\b", text):
+        score += 8
+    if short and short in text:
+        score += 8
+    elif tokens and any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens):
+        score += 4
+    if symbol.upper() in {str(t).upper() for t in article.get("related_tickers") or []}:
+        score += 4
+    if re.search(r"\b(earnings|revenue|profit|guidance|forecast|acquisition|merger|lawsuit|"
+                 r"regulator|antitrust|chief executive|ceo|product|recall|dividend|buyback)\b", text):
+        score += 3
+    try:
+        article_date = pd.Timestamp(article["pub_date"]).date()
+        distance = abs((article_date - event).days)
+        score += max(0.0, 8.0 - min(distance, 365) / 30.0)
+        if article_date > event:
+            score -= 5.0  # retain useful reaction coverage, but do not let it crowd catalysts
+    except (ValueError, TypeError, KeyError):
+        pass
+    return score
+
+
+def _mentions_company(article: dict, symbol: str, company: str) -> bool:
+    text = f"{article.get('headline', '')} {article.get('snippet', '')}".lower()
+    if re.search(rf"\b{re.escape(symbol.lower())}\b", text):
+        return True
+    short = short_company(company).lower()
+    if short and short in text:
+        return True
+    tokens = [t for t in re.findall(r"[a-z0-9]+", short) if len(t) >= 4]
+    return bool(tokens and any(re.search(rf"\b{re.escape(token)}\b", text) for token in tokens))
+
+
+def select_evidence(articles: list[dict], event: date, symbol: str, company: str,
+                    begin: date, end: date, cap: int = COMBINED_ARTICLE_CAP) -> list[dict]:
+    """Deduplicate, rank, and cap the combined pool before it reaches Gemini."""
+    normalised = []
+    for raw in articles:
+        article = _normalise_article(raw, raw.get("source") or "nyt")
+        if not article:
+            continue
+        if article.get("source") == "yahoo" and not _mentions_company(article, symbol, company):
+            continue
+        published = pd.Timestamp(article["pub_date"]).date()
+        if begin <= published <= end:
+            article["relevance_score"] = round(_article_score(article, event, symbol, company), 2)
+            normalised.append(article)
+    normalised.sort(key=lambda a: a["relevance_score"], reverse=True)
+
+    unique = []
+    seen_urls: set[str] = set()
+    seen_titles: list[str] = []
+    source_counts: dict[str, int] = {}
+    for article in normalised:
+        source = article.get("source") or "nyt"
+        if source_counts.get(source, 0) >= SOURCE_CAPS.get(source, cap):
+            continue
+        title = _title_key(article["headline"])
+        if article["url"] in seen_urls:
+            continue
+        if any(SequenceMatcher(None, title, prior).ratio() >= 0.88 for prior in seen_titles):
+            continue
+        seen_urls.add(article["url"])
+        seen_titles.append(title)
+        source_counts[source] = source_counts.get(source, 0) + 1
+        unique.append(article)
+        if len(unique) >= cap:
+            break
+    return sorted(unique, key=lambda a: a["pub_date"])
+
+
+def sample_articles(event: date, mode: str, symbol: str, company: str = "",
+                    log=print, budget: int | None = None, on_progress=None) -> list[dict]:
+    """One capped evidence pool from NYT, Yahoo Finance news, and SEC EDGAR."""
+    begin, end = market.article_window(event, mode)
+
+    def publish_nyt(found: list[dict]) -> None:
+        if on_progress is not None:
+            on_progress(select_evidence(found, event, symbol, company, begin, end))
+
+    nyt = _sample_nyt_articles(event, mode, symbol, company, log=log, budget=budget,
+                               on_progress=publish_nyt)
+    supplemental = supplemental_articles(event, symbol, company, log=log)
+    combined = select_evidence([*nyt, *supplemental], event, symbol, company, begin, end)
+    if on_progress is not None:
+        on_progress(combined)
+    counts = {source: sum(a.get("source") == source for a in combined)
+              for source in ("nyt", "yahoo", "sec")}
+    log(f"  evidence: {len(combined)} candidate(s) after ranking/deduplication "
+        f"(NYT {counts['nyt']}, Yahoo {counts['yahoo']}, SEC {counts['sec']})")
+    return combined
+
+
+def get_news(event_date: date, symbol: str, company: str = "") -> list[dict]:
+    """Tight event-window evidence for the chart and explanation endpoint."""
+    begin, end = market.search_window(event_date)
+    nyt = _get_nyt_news(event_date, symbol, company)
+    supplemental = supplemental_articles(event_date, symbol, company)
+    return select_evidence([*nyt, *supplemental], event_date, symbol, company,
+                           begin, end, cap=40)

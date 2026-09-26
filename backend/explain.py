@@ -21,17 +21,17 @@ DATA
 - Same day: {market} {market_pct:+.2f}%. Excess vs market {excess_vs_market:+.2f} pts.
   1y beta to {market}: {beta_1y}, so the market alone implies {beta_expected_pct:+.2f}%;
   unexplained (idiosyncratic) part: {idiosyncratic_pct:+.2f}%.{beta_note}
-- The move above is a single completed trading session. If headlines describe events that
+- The move above is a single completed trading session. If evidence describes events that
   happened after that session, do not present them as the cause.
 
-HEADLINES (NYT, UTC timestamps; ids are for citation)
+EVIDENCE (NYT and Yahoo Finance reporting plus SEC filings; UTC timestamps; ids are for citation)
 {headlines}
 
 TASK
 Give 2-3 candidate explanations for the move, most plausible first. Each must cite at
-least one piece of evidence. Cite headlines by id (e.g. "H3"); cite data points with one of:
-"percentile", "divergence", "beta", "sector". Only cite headlines published before or during
-the move window if you claim they caused it. If the headlines don't support a clear
+least one piece of evidence. Cite evidence items by id (e.g. "H3"); cite data points with one of:
+"percentile", "divergence", "beta", "sector". Only cite items published before or during
+the move window if you claim they caused it. If the evidence doesn't support a clear
 explanation, say so and lower confidence rather than inventing a catalyst.
 
 Language rules:
@@ -60,7 +60,7 @@ def _headline_block(headlines: list[dict]) -> str:
     if not headlines:
         return "(none found in the window)"
     return "\n".join(
-        f"{h['id']} [{h['pub_date']}] "
+        f"{h['id']} [{h['pub_date']}] [SOURCE: {h.get('publisher') or h.get('source', 'unknown')}] "
         f"[{'POSSIBLE CATALYST WINDOW' if h.get('is_potential_catalyst') else 'CONTEXT ONLY — CANNOT SUPPORT CAUSATION'}] "
         f"{h['headline']} — {h['snippet'][:240]}"
         for h in headlines)
@@ -99,9 +99,9 @@ def _computed_fallback(inv: dict, caveat: str | None = None) -> dict:
     headlines = inv.get("headlines") or []
     if headlines:
         explanations.append({
-            "title": "Available coverage is context, not a confirmed catalyst",
+            "title": "Available evidence is context, not a confirmed catalyst",
             "summary": (
-                f"The relevant NYT coverage near the session discusses {symbol}, but publication timing "
+                f"The relevant evidence near the session discusses {symbol}, but publication timing "
                 "and topical relevance alone do not establish that it caused the price move."
             ),
             "confidence": "low",
@@ -114,7 +114,7 @@ def _computed_fallback(inv: dict, caveat: str | None = None) -> dict:
         "explanations": explanations,
         "caveat": caveat or (
             "Gemini was temporarily unavailable. These fallback observations are generated "
-            "directly from the displayed calculations and filtered headlines."),
+            "directly from the displayed calculations and filtered evidence."),
         "generated_by": "computed",
     }
 
@@ -226,7 +226,8 @@ def explain(inv: dict) -> dict:
         for ev in exp.get("evidence", []):
             ref = str(ev.get("ref", "")).strip()
             if ref in by_id and by_id[ref].get("is_potential_catalyst"):
-                resolved.append({"kind": "headline", "ref": ref, "why": ev.get("why", ""),
+                resolved.append({"kind": by_id[ref].get("kind", "news"),
+                                 "ref": ref, "why": ev.get("why", ""),
                                  "headline": by_id[ref]})
             elif ref in allowed:
                 resolved.append({"kind": "data", "ref": ref, "why": ev.get("why", "")})

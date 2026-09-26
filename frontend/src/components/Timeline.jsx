@@ -165,6 +165,7 @@ function EventCard({ e, onClose }) {
       <div className="tl-detail-meta">
         <span className="chip" style={{ marginLeft: 0 }}>{e.ref}</span>
         <span className="chip" style={{ marginLeft: 0, background: s.color, color: '#fff' }}>{s.label}</span>
+        <span className="chip" style={{ marginLeft: 0 }}>{e.publisher ?? e.source}</span>
         {timing && <span className={`chip timing-chip ${timing.tone}`}>{timing.label}</span>}
         <span className="chip" style={{ marginLeft: 0 }}>{e.significance} significance</span>
         <span className="tl-detail-date">{etTime(e.pub_date)}</span>
@@ -215,9 +216,11 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
         <div className="tl-progress" role="status">
           <span className="tl-spin" aria-hidden="true" />
           <span>
-            Sampling New York Times coverage in the background
+            Sampling NYT, Yahoo Finance, and SEC evidence in the background
             {tl.pending_requests > 0 && <> — {tl.pending_requests} request{tl.pending_requests === 1 ? '' : 's'} left</>}
-            . Rate-limited to 5/min, so this takes under a minute. The page updates itself.
+            {tl.pending_requests > 0
+              ? '. NYT is rate-limited to 5/min, so this can take under a minute.'
+              : '. The page updates itself.'}
           </span>
         </div>
       )}
@@ -226,7 +229,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
         <div className="step">What was published, and what it implies</div>
         <h2>{tl.company} · {tl.event_label}</h2>
         <p className="sub">
-          {tl.pool_size} New York Times article{tl.pool_size === 1 ? '' : 's'} sampled across the{' '}
+          {tl.pool_size} evidence item{tl.pool_size === 1 ? '' : 's'} sampled across the{' '}
           {tl.window.label} before the session{window_tail(tl)}.
           {tl.triage_note
             ? ' Relevance classification is pending.'
@@ -234,6 +237,9 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
           {counts.stock ? ` ${counts.stock} company-specific.` : ''}
           {counts.market ? ` ${counts.market} market-wide.` : ''}
           {counts.sector ? ` ${counts.sector} sector-wide.` : ''}
+          {tl.source_counts?.nyt ? ` ${tl.source_counts.nyt} NYT.` : ''}
+          {tl.source_counts?.yahoo ? ` ${tl.source_counts.yahoo} Yahoo Finance.` : ''}
+          {tl.source_counts?.sec ? ` ${tl.source_counts.sec} SEC filing${tl.source_counts.sec === 1 ? '' : 's'}.` : ''}
         </p>
 
         {tl.pool_size === 0 ? (
@@ -241,13 +247,13 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
             <p className="loading">
               {tl.warming
                 ? 'Sampling in the background…'
-                : <>No articles sampled yet. This needs <code>NYT_API_KEY</code> and <code>GEMINI_API_KEY</code> set.</>}
+                : <>No evidence sampled yet. Gemini is required for triage; an NYT key adds archival coverage.</>}
             </p>
             <button className="primary" onClick={onWarm} disabled={warming}>
-              {warming ? 'Sampling…' : 'Sample articles now'}
+              {warming ? 'Sampling…' : 'Sample evidence now'}
             </button>
             <p className="caveat">
-              A {tl.window.label} window costs one rate-limited NYT request per 6-month chunk
+              NYT archival coverage costs one rate-limited request per 6-month chunk
               (up to {Math.max(1, Math.round(tl.window.days / 183))} requests), so this can take a
               minute. Pre-warm it with <code>python ingest.py {tl.symbol} {tl.mode} --timeline</code>.
             </p>
@@ -267,7 +273,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
               <div className="tl-empty-evidence" role="status">
                 <b>No relevant evidence to plot</b>
                 <span>
-                  New York Times articles were sampled, but none passed both the relevance and
+                  News and filings were sampled, but none passed both the relevance and
                   market-session timing checks for this move. The chart is hidden instead of
                   displaying unrelated or post-session coverage.
                 </span>
@@ -302,6 +308,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
                   <span className="chip" style={{ marginLeft: 0 }}>{e.ref}</span>
                   <span className="tl-list-date">{etTime(e.pub_date)}</span>
                   <span className="chip" style={{ marginLeft: 0, color: SCOPE[e.scope]?.color }}>{SCOPE[e.scope]?.label}</span>
+                  <span className="chip" style={{ marginLeft: 0 }}>{e.publisher ?? e.source}</span>
                   {TIMING[e.timing_role] && (
                     <span className={`chip timing-chip ${TIMING[e.timing_role].tone}`}>
                       {TIMING[e.timing_role].label}
@@ -318,8 +325,8 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
 
       <p className="disclaimer">
         Historical observation only — not investment advice. Article selection and reasoning by
-        Gemini, grounded in the coverage shown. Publication timing and causal eligibility are
-        enforced by market-session rules; every article links to its source.
+        Gemini, grounded in NYT and Yahoo Finance reporting plus SEC filings. Publication timing and causal eligibility are
+        enforced by market-session rules; every evidence item links to its source.
       </p>
     </div>
   )

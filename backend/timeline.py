@@ -32,12 +32,13 @@ from language_guard import guard_report, guard_statement
 CACHE_DIR = Path(__file__).parent / ".cache"
 
 SCOPES = {"stock": "Stock-specific", "sector": "Sector-wide", "market": "Market-wide"}
-MAX_ARTICLES_IN_PROMPT = 140
+MAX_ARTICLES_IN_PROMPT = news.COMBINED_ARTICLE_CAP
 SNIPPET_CHARS = 260
 # After a triage attempt fails (usually a spent daily quota), leave it alone for a while
 # instead of retrying on every page load.
 TRIAGE_RETRY_COOLDOWN = 600  # seconds
-TIMING_SCHEMA_VERSION = 2
+TIMING_SCHEMA_VERSION = 3
+EVIDENCE_POOL_VERSION = 2
 
 TIMING_LABELS = {
     "background": "Background before the catalyst window",
@@ -58,8 +59,9 @@ Investigated session: {event_date} — {symbol} {move_pct:+.2f}% close-to-close
   Unexplained (idiosyncratic) part: {idiosyncratic_pct:+.2f}% of a {ticker_pct:+.2f}% move.
   Our own decomposition puts this at: {verdict} ({verdict_share} of the move is idiosyncratic).
 
-ARTICLES (NYT, {window_days} days of coverage, ids are for citation; timing labels are
-calculated by the application and must not be changed)
+EVIDENCE (NYT reporting, Yahoo Finance news, and SEC filings across {window_days} days;
+ids are for citation; source and timing labels are calculated by the application and must
+not be changed)
 {articles}
 
 TASK
@@ -305,7 +307,11 @@ def collect(event, symbol: str, mode: str, company: str = "", log=print) -> list
     """
     def publish(found: list[dict]) -> None:
         pool = [{**a, "ref": f"A{i}"} for i, a in enumerate(found[:MAX_ARTICLES_IN_PROMPT], 1)]
-        _write_json(_pool_path(symbol, event, mode), pool)
+        _write_json(_pool_path(symbol, event, mode), {
+            "schema": EVIDENCE_POOL_VERSION,
+            "sources": sorted({a.get("source", "nyt") for a in pool}),
+            "articles": pool,
+        })
 
     articles = news.sample_articles(event, mode, symbol, company, log=log,
                                     on_progress=publish)
@@ -320,7 +326,8 @@ def _article_block(articles: list[dict]) -> str:
     if not articles:
         return "(none found in the window)"
     return "\n".join(
-        f"{a['ref']} [{a['pub_date']}] [{a['timing_label'].upper()} — "
+        f"{a['ref']} [{a['pub_date']}] [SOURCE: {a.get('publisher') or a.get('source', 'unknown')}] "
+        f"[{a['timing_label'].upper()} — "
         f"{'CAN SUPPORT CAUSAL EXPLANATION' if a['can_explain_move'] else 'CANNOT EXPLAIN THIS MOVE'}] "
         f"{a['headline']} — {a['snippet'][:SNIPPET_CHARS]}"
         for a in articles)
@@ -439,7 +446,7 @@ def _triage_failure(e: Exception) -> tuple[bool, str]:
     if any(m in text for m in _QUOTA_MARKERS):
         return True, ("Gemini is unavailable right now. The free tier allows 20 requests per "
                       "day and this project has spent today's, or the model is under high "
-                      "load. The articles below are real — only the triage is missing.")
+                      "load. Sampled items are withheld until relevance triage succeeds.")
     return False, f"Gemini call failed: {scrub(e)[:200]}"
 
 
@@ -460,15 +467,22 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         _set_job(symbol, mode, state="idle")
 
     pool_blob = _read_json(_pool_path(symbol, event, mode))
-    pool = pool_blob if isinstance(pool_blob, list) else []
+    pool_is_current = (isinstance(pool_blob, dict) and
+                       pool_blob.get("schema") == EVIDENCE_POOL_VERSION)
+    if isinstance(pool_blob, dict):
+        pool = pool_blob.get("articles") or []
+    else:
+        pool = pool_blob if isinstance(pool_blob, list) else []
     for i, a in enumerate(pool, start=1):
         a.setdefault("ref", f"A{i}")
+        a.setdefault("source", "nyt")
+        a.setdefault("publisher", "The New York Times")
     triaged = _read_json(_triage_path(symbol, event, mode))
     if triaged and triaged.get("timing_schema") != TIMING_SCHEMA_VERSION:
         # Prompt-only timing rules proved too easy for the model to violate. Re-triage old
         # cache entries once under the deterministic timing schema.
         triaged = None
-    if refresh:
+    if refresh or (pool and not pool_is_current):
         triaged = None
 
     todo = missing_chunks(event, symbol, mode, inv["company"])
@@ -483,6 +497,8 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         """
         if refresh:
             return True
+        if not pool_is_current:
+            return True  # cold start or upgrade an old NYT-only pool to combined evidence
         if todo > 0:
             return True  # sampling work remains
         if not (pool and triaged is None and GEMINI_API_KEY):
@@ -512,6 +528,10 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         "verdict": verdict,
         "against_market": verdict["against_market"],
         "pool_size": len(pool),
+        "source_counts": {
+            source: sum(a.get("source") == source for a in pool)
+            for source in ("nyt", "yahoo", "sec")
+        },
         "pending_requests": todo,
         "warming": bool(warming),
         "job": job,
@@ -524,15 +544,15 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
     }
 
     if not pool:
-        if not news.NYT_API_KEY:
-            payload["caveat"] = "Set NYT_API_KEY to load coverage."
-        elif news.budget_remaining() <= 0:
+        if not pool_is_current:
+            payload["caveat"] = ("No evidence cached yet."
+                                 + (" Sampling in the background." if warming else ""))
+        elif news.NYT_API_KEY and news.budget_remaining() <= 0:
             payload["caveat"] = (f"NYT's daily request cap is spent "
                                  f"({news.budget_state()['used']}/{news.NYT_DAILY_CAP}). "
-                                 "It resets at midnight ET.")
+                                 "It resets at midnight ET; Yahoo and SEC evidence was still checked.")
         else:
-            payload["caveat"] = ("No articles cached yet."
-                                 + (" Sampling in the background." if warming else ""))
+            payload["caveat"] = "No relevant evidence was found across NYT, Yahoo Finance, or SEC EDGAR."
         return payload
 
     if triaged is None:
@@ -591,6 +611,10 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
             "why": why, "thesis": thesis,
             "pub_date": art["pub_date"], "headline": art["headline"],
             "url": art["url"], "snippet": art["snippet"],
+            "source": art.get("source", "nyt"),
+            "publisher": art.get("publisher", "The New York Times"),
+            "kind": art.get("kind", "news"),
+            "form": art.get("form"),
             "timing_role": timing_role, "timing_label": art["timing_label"],
             "can_explain_move": eligible,
         })

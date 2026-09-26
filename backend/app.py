@@ -96,8 +96,9 @@ def _prefetch_timeline(symbol: str, mode: str, inv: dict) -> None:
     investigation response.
     """
     try:
-        if timeline.missing_chunks(_event_date(inv), symbol, mode, inv["company"]) > 0:
-            timeline.start_warm(symbol, mode, inv, log=app.logger.info)
+        # build() is disk-only and already owns the schema, cooldown, and missing-work
+        # checks. Calling it here also warms Yahoo/SEC when NYT chunks are already cached.
+        timeline.build(symbol, mode, inv, log=app.logger.info)
     except Exception:
         pass
 

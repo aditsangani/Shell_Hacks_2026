@@ -8,7 +8,7 @@ Search any traded ticker, pick which session to investigate, and get a deep-dive
 
 1. **How unusual:** percentile and z-score vs 5 years of daily moves
 2. **Company or market:** ticker vs its sector ETF vs SPY, intraday, with a beta-adjusted idiosyncratic move
-3. **Evidence timeline** — its own page: NYT coverage sampled across a long window, triaged by Gemini into the articles that bear on the move, plotted by date and coloured stock / sector / market
+3. **Evidence timeline** — NYT and Yahoo Finance reporting plus SEC filings, deduplicated and ranked before Gemini triages the items that bear on the move
 4. **Has this happened before:** the closest past moves and their +1/+5/+20-day returns
 5. **Voice briefing:** ElevenLabs TTS
 
@@ -33,7 +33,7 @@ The look-back window depends on the mode: **6 months** for a latest-session move
 move needs recent context) and **5 years** for an unusual one (that session may be 30+
 trading days old and needs the long view).
 
-A window that long cannot be fetched in one call. Article Search returns at most 100 results
+A NYT window that long cannot be fetched in one call. Article Search returns at most 100 results
 per query and sorts only by `newest` or `oldest`, so a single 5-year request comes back
 holding only the last fortnight. The window is split into **calendar-year cells** and one page
 is sampled from each, which is what makes the timeline span its range instead of clustering
@@ -41,7 +41,7 @@ at one end.
 
 **You should never wait for this.** `/api/timeline` only ever reads from disk; sampling runs
 on a background thread and the page polls until it settles. Opening an investigation kicks off
-the warm immediately, so by the time you click through to the timeline the articles are
+the warm immediately, so by the time you click through to the timeline the evidence is
 usually already there. Results are published per cell, so the timeline fills in progressively
 rather than sitting blank. A cold 5-year warm takes ~75s in the background and **0.003s per
 poll** while it happens.
@@ -72,13 +72,17 @@ sampler is built around not making them:
 - **A hard daily budget.** Spend is persisted to `backend/.cache/nyt_budget.json` and stops at
   400/day, clear of the real 500 cap. A long test session degrades to cached data instead of
   erroring, and never sleeps when everything is already cached.
-- **Partial results over exceptions.** A rate-limited chunk keeps whatever was collected.
+- **Three-source candidate cap.** NYT, Yahoo Finance News, and SEC EDGAR records are
+  normalized, deduplicated, relevance-ranked, and capped at 60 total candidates before the
+  single Gemini call. Per-source caps prevent one feed from crowding out the others.
+- **Partial results over exceptions.** A rate-limited or unavailable source keeps whatever
+  the other sources collected.
 
 ### The stock-specific vs market-wide verdict
 
 The headline verdict is *not* left to the model. It comes from the beta-adjusted
 decomposition (`timeline.scope_verdict`): the share of the move the market's beta does not
-explain. Gemini triages the articles — keeping only those that plausibly bear on the move,
+explain. Gemini triages the evidence — keeping only items that plausibly bear on the move,
 labelling each `stock` / `sector` / `market`, rating significance, writing a thesis — and is
 asked to argue that number rather than invent one. If it disagrees, the disagreement is
 surfaced instead of silently swapping the verdict.
@@ -86,11 +90,13 @@ surfaced instead of silently swapping the verdict.
 ### API quotas are the binding constraint
 
 - **NYT** — 500 requests/day, 5/min. Sampler stops itself at 400/day.
+- **Yahoo Finance News** — no additional key; responses are cached and deduplicated.
+- **SEC EDGAR** — no key; set `SEC_USER_AGENT` to identify the app, as SEC guidance requests.
 - **Gemini free tier** — **20 requests/day.** One timeline triage is one request.
 
-When Gemini's quota is spent the timeline still shows the articles, marked untriaged, with
-the verdict still computed from prices. Failed triage is not retried for 10 minutes, so an
-exhausted quota does not turn every page load into another doomed call.
+When Gemini's quota is spent, untriaged search results are withheld rather than presented as
+evidence; the verdict is still computed from prices. Failed triage is not retried for 10
+minutes, so an exhausted quota does not turn every page load into another doomed call.
 
 ## Run locally
 
@@ -118,8 +124,9 @@ The API port is 5001 because macOS AirPlay Receiver occupies 5000 and answers
 target in `frontend/vite.config.js` to match.
 
 Every key is optional for a first run. Without `DATABASE_URL` the chart is computed from
-yfinance in memory. Without `NYT_API_KEY` no headlines load. Missing Gemini or ElevenLabs
-keys show an inline error. Ticker search and all price analysis work with no keys at all.
+yfinance in memory. Without `NYT_API_KEY`, Yahoo Finance news and SEC filings still load.
+Missing Gemini or ElevenLabs keys show an inline error. Ticker search and all price analysis
+work with no keys at all.
 
 Repeat searches reuse a cached bundle for 5 minutes, so browsing around does not trip
 Yahoo's rate limits. **↻ Refresh** forces a virgin fetch.
