@@ -27,6 +27,7 @@ from google.genai import types
 import market
 import news
 from config import GEMINI_API_KEY, GEMINI_MODEL, scrub
+from language_guard import guard_report, guard_statement
 
 CACHE_DIR = Path(__file__).parent / ".cache"
 
@@ -80,6 +81,9 @@ Hard rules:
 - If no kept article can support a causal explanation, explicitly say the available coverage
   does not identify the cause. Later reporting may corroborate facts, but its publication time
   prevents it from being evidence that investors reacted to it during this session.
+- Even for eligible articles, use calibrated language such as "may", "could", "possible", or
+  "consistent with". Never use definitely, certainly, clearly, proved, guaranteed, or predict
+  what the stock will do next.
 - `significance`: "high" if a judge should read it, "medium" if relevant background, "low" if weak.
 
 Return JSON only:
@@ -547,6 +551,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
     timed_pool = _timed_articles(pool, inv)
     by_ref = {a["ref"]: a for a in timed_pool}
     events = []
+    language_adjustments = []
     for e in triaged.get("events", []):
         art = by_ref.get(str(e.get("ref", "")).strip())
         if not art:
@@ -555,7 +560,22 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         eligible = art["can_explain_move"]
         why = e.get("why", "")
         thesis = e.get("thesis", "")
-        if not eligible:
+        if eligible:
+            why, flags = guard_statement(
+                why,
+                "This article is inside the possible catalyst window, but the available "
+                "evidence does not establish that it caused the move.",
+                require_uncertainty=True,
+            )
+            language_adjustments.extend(flags)
+            if thesis:
+                thesis, flags = guard_statement(
+                    thesis,
+                    "This remains a possible interpretation rather than a confirmed cause.",
+                    require_uncertainty=True,
+                )
+                language_adjustments.extend(flags)
+        else:
             if timing_role == "reaction":
                 why = ("Published after the investigated session; retained as reaction or "
                        "later context, not as evidence of what caused the move.")
@@ -578,8 +598,18 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
 
     payload["events"] = events
     payload["narrative"] = triaged.get("narrative", "")
-    payload["caveat"] = triaged.get("caveat", "")
+    caveat = triaged.get("caveat", "")
+    if caveat:
+        caveat, flags = guard_statement(
+            caveat, "The generated analysis is limited to the cited evidence and does not "
+            "establish causation or predict future performance.")
+        language_adjustments.extend(flags)
+    payload["caveat"] = caveat
     payload["verdict_note"] = triaged.get("verdict_note", "")
+    payload["language_guard"] = guard_report(language_adjustments)
+    if language_adjustments:
+        notice = "Overconfident generated wording was automatically qualified or replaced."
+        payload["caveat"] = f"{payload['caveat']} {notice}".strip()
     catalyst_count = sum(1 for event in events if event["can_explain_move"])
     if catalyst_count:
         payload["cause_conclusion"] = (

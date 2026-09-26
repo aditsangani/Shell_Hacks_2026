@@ -22,15 +22,16 @@ def briefing_script(inv: dict, explanations: dict | None) -> str:
     if inv.get("sector_known"):
         lines.append(
             f"The {inv['sector_name']} sector moved {d['sector_pct']:+.1f} percent and the "
-            f"S&P 500 {d['market_pct']:+.1f} percent, so most of this move was specific to "
-            f"{inv['symbol']}.")
+            f"S&P 500 {d['market_pct']:+.1f} percent. The beta-adjusted comparison leaves "
+            "much of the move unexplained by those benchmarks.")
     else:
         lines.append(
             f"The S&P 500 moved {d['market_pct']:+.1f} percent, leaving "
-            f"{d['idiosyncratic_pct']:+.1f} percent specific to {inv['symbol']}.")
+            f"{d['idiosyncratic_pct']:+.1f} percentage points unexplained by this simple "
+            "market comparison.")
     exps = (explanations or {}).get("explanations") or []
     if exps:
-        lines.append(f"The most likely explanation: {exps[0]['title']}. {exps[0]['summary']}")
+        lines.append(f"One evidence-supported possibility is: {exps[0]['title']}. {exps[0]['summary']}")
     lines.append("This is a look at what happened, not investment advice.")
     return " ".join(lines)
 

@@ -263,7 +263,17 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
               </div>
             )}
             <Verdict tl={tl} />
-            {!tl.triage_note && (
+            {!tl.triage_note && tl.events.length === 0 && (
+              <div className="tl-empty-evidence" role="status">
+                <b>No relevant evidence to plot</b>
+                <span>
+                  New York Times articles were sampled, but none passed both the relevance and
+                  market-session timing checks for this move. The chart is hidden instead of
+                  displaying unrelated or post-session coverage.
+                </span>
+              </div>
+            )}
+            {!tl.triage_note && tl.events.length > 0 && (
               <>
                 {tl.cause_conclusion && (
                   <div className="tl-conclusion">

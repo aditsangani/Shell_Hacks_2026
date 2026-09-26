@@ -6,6 +6,7 @@ from google import genai
 from google.genai import errors, types
 
 from config import GEMINI_API_KEY, GEMINI_FALLBACK_MODEL, GEMINI_MODEL
+from language_guard import cap_confidence, guard_report, guard_statement, guard_title
 
 PROMPT = """You are an equity research assistant helping a retail investor understand
 why a stock moved. You do NOT give investment advice or predictions.
@@ -33,9 +34,16 @@ least one piece of evidence. Cite headlines by id (e.g. "H3"); cite data points 
 the move window if you claim they caused it. If the headlines don't support a clear
 explanation, say so and lower confidence rather than inventing a catalyst.
 
+Language rules:
+- Treat every explanation as a hypothesis, not a finding of cause. Use calibrated terms such
+  as "may", "could", "possible", or "consistent with".
+- Never use absolute language such as definitely, certainly, clearly, proved, guaranteed, or
+  "the cause". Never predict what the stock will do next.
+- `confidence` may be "medium" or "low" for a causal explanation; never return "high".
+
 Return JSON only:
 {{"explanations": [{{"title": str, "summary": str (2-3 sentences),
-   "confidence": "high"|"medium"|"low",
+   "confidence": "medium"|"low",
    "evidence": [{{"ref": str, "why": str}}]}}],
   "caveat": str}}
 """
@@ -51,8 +59,11 @@ def _refs_for(inv: dict) -> set[str]:
 def _headline_block(headlines: list[dict]) -> str:
     if not headlines:
         return "(none found in the window)"
-    return "\n".join(f"{h['id']} [{h['pub_date']}] {h['headline']} — {h['snippet'][:240]}"
-                     for h in headlines)
+    return "\n".join(
+        f"{h['id']} [{h['pub_date']}] "
+        f"[{'POSSIBLE CATALYST WINDOW' if h.get('is_potential_catalyst') else 'CONTEXT ONLY — CANNOT SUPPORT CAUSATION'}] "
+        f"{h['headline']} — {h['snippet'][:240]}"
+        for h in headlines)
 
 
 def _sector_lines(inv: dict, div: dict) -> tuple[str, str]:
@@ -66,7 +77,7 @@ def _sector_lines(inv: dict, div: dict) -> tuple[str, str]:
             f"sector's move may be {inv['symbol']} itself.")
 
 
-def _computed_fallback(inv: dict) -> dict:
+def _computed_fallback(inv: dict, caveat: str | None = None) -> dict:
     """Evidence-only explanation when every Gemini model is temporarily unavailable."""
     symbol, market = inv["symbol"], inv["market"]
     move, div = inv["move"], inv["divergence"]
@@ -101,10 +112,58 @@ def _computed_fallback(inv: dict) -> dict:
         })
     return {
         "explanations": explanations,
-        "caveat": ("Gemini was temporarily unavailable. These fallback observations are generated "
-                   "directly from the displayed calculations and filtered headlines."),
+        "caveat": caveat or (
+            "Gemini was temporarily unavailable. These fallback observations are generated "
+            "directly from the displayed calculations and filtered headlines."),
         "generated_by": "computed",
     }
+
+
+def _guard_gemini_result(result: dict) -> dict:
+    """Replace overconfident model prose before it can reach the UI or voice briefing."""
+    adjustments: list[str] = []
+    safe_explanations = []
+    for explanation in result.get("explanations", []):
+        title, flags = guard_title(explanation.get("title"))
+        adjustments.extend(flags)
+        summary, flags = guard_statement(
+            explanation.get("summary"),
+            "The cited evidence is relevant to this move, but it does not establish a cause. "
+            "Treat this as a possible explanation rather than a confirmed account.",
+            require_uncertainty=True,
+        )
+        adjustments.extend(flags)
+        confidence, flags = cap_confidence(explanation.get("confidence"))
+        adjustments.extend(flags)
+
+        safe_evidence = []
+        for evidence in explanation.get("evidence", []):
+            why, flags = guard_statement(
+                evidence.get("why"),
+                "This evidence is relevant context, but it does not establish causation.",
+            )
+            adjustments.extend(flags)
+            safe_evidence.append({**evidence, "why": why})
+        safe_explanations.append({
+            **explanation,
+            "title": title,
+            "summary": summary,
+            "confidence": confidence,
+            "evidence": safe_evidence,
+        })
+
+    caveat, flags = guard_statement(
+        result.get("caveat"),
+        "These are evidence-limited possibilities, not confirmed causes or predictions.",
+    )
+    adjustments.extend(flags)
+    result["explanations"] = safe_explanations
+    if adjustments:
+        notice = "Overconfident generated wording was automatically qualified or replaced."
+        caveat = f"{caveat} {notice}".strip()
+    result["caveat"] = caveat
+    result["language_guard"] = guard_report(adjustments)
+    return result
 
 
 def explain(inv: dict) -> dict:
@@ -143,6 +202,7 @@ def explain(inv: dict) -> dict:
             result = json.loads(resp.text)
             result["generated_by"] = "gemini"
             result["model"] = model
+            result = _guard_gemini_result(result)
             break
         except errors.ClientError as exc:
             # RESOURCE_EXHAUSTED can be scoped to one model's rate/token quota. Try the
@@ -159,14 +219,36 @@ def explain(inv: dict) -> dict:
     # Keep only citations that resolve; attach the real headline so the UI shows evidence, not claims.
     by_id = {h["id"]: h for h in inv.get("headlines") or []}
     allowed = _refs_for(inv)
+    resolved_explanations = []
     for exp in result.get("explanations", []):
         resolved = []
+        invalid_evidence = False
         for ev in exp.get("evidence", []):
             ref = str(ev.get("ref", "")).strip()
-            if ref in by_id:
+            if ref in by_id and by_id[ref].get("is_potential_catalyst"):
                 resolved.append({"kind": "headline", "ref": ref, "why": ev.get("why", ""),
                                  "headline": by_id[ref]})
             elif ref in allowed:
                 resolved.append({"kind": "data", "ref": ref, "why": ev.get("why", "")})
+            else:
+                # Reject the whole explanation if any cited source is nonexistent or outside
+                # the catalyst window. Keeping its other citations could leave the unsupported
+                # claim intact while merely hiding the evidence that made it invalid.
+                invalid_evidence = True
         exp["evidence"] = resolved
+        if resolved and not invalid_evidence:
+            resolved_explanations.append(exp)
+    result["explanations"] = resolved_explanations
+    if result.get("generated_by") == "gemini" and not resolved_explanations:
+        guarded = result.get("language_guard") or {"adjusted": 0, "reasons": []}
+        fallback = _computed_fallback(
+            inv,
+            "Gemini's candidate explanations were withheld because none had eligible, "
+            "resolvable evidence. The observations shown are calculated directly from the data.",
+        )
+        fallback["language_guard"] = {
+            "adjusted": guarded.get("adjusted", 0) + 1,
+            "reasons": sorted(set(guarded.get("reasons", []) + ["unsupported_explanation"])),
+        }
+        return fallback
     return result

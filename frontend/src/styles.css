@@ -214,6 +214,12 @@ tr.event td { font-weight: 650; background: var(--wash); }
   background: var(--wash); color: var(--text-secondary); font-size: 13px;
 }
 .tl-conclusion b { color: var(--text-primary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.tl-empty-evidence {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding: 16px;
+  border: 1px dashed var(--border); border-radius: 8px; background: var(--wash);
+  color: var(--text-secondary); font-size: 13px; line-height: 1.6;
+}
+.tl-empty-evidence b { color: var(--text-primary); font-size: 14px; }
 .timing-chip { margin-left: 0; }
 .timing-chip.catalyst { border-color: var(--accent); color: var(--accent); background: rgba(125,224,189,.08); }
 .timing-chip.reaction { border-color: var(--series-2); color: var(--series-2); }
