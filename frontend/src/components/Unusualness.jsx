@@ -20,7 +20,7 @@ export default function Unusualness({ inv }) {
   const bins = m.histogram.map((b) => ({ ...b, h: Math.sqrt(b.count) }))
 
   return (
-    <section className="card">
+    <section className="card insight-card unusualness-card">
       <div className="step">1 · How unusual</div>
       <h2>
         <span className="big">{m.percentile}%</span>

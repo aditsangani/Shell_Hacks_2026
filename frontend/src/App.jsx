@@ -176,42 +176,58 @@ export default function App() {
   /* ---------------- Intro ---------------- */
   if (!route) {
     return (
-      <div className="page">
+      <div className="page landing-page">
         <div className="brand">
-          <b>FinSight</b>
-          <span>Investigation Mode</span>
+          <div className="brand-lockup">
+            <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
+            <b>FinSight</b>
+          </div>
+          <span className="brand-mode"><i className="status-dot" />Investigation Mode</span>
         </div>
 
         <section className="card intro">
-          <h1 className="intro-title">What happened?</h1>
-          <p className="intro-lead">
-            Pick any traded stock and we'll investigate one of its biggest recent moves —
-            how unusual it was, whether it was the company or the market, what was published
-            around it, and what has happened after moves this size before.
-          </p>
-
-          <Search onPick={start} busy={loading} />
-
-          <div className="modes" role="radiogroup" aria-label="Which session to investigate">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                role="radio"
-                aria-checked={mode === m.id}
-                className={mode === m.id ? 'mode on' : 'mode'}
-                onClick={() => changeMode(m.id)}
-              >
-                <b>{m.label}</b>
-                <span>{m.hint}</span>
-              </button>
-            ))}
+          <div className="intro-copy">
+            <div className="eyebrow"><span />Market intelligence, with receipts</div>
+            <h1 className="intro-title">Understand the move.<br /><em>Follow the evidence.</em></h1>
+            <p className="intro-lead">
+              Pick any traded stock and we'll investigate one of its biggest recent moves —
+              how unusual it was, whether it was the company or the market, what was published
+              around it, and what has happened after moves this size before.
+            </p>
           </div>
 
-          <div className="examples">
-            Try:
-            {EXAMPLES.map((t) => (
-              <button key={t} className="chip-btn" onClick={() => start(t)}>{t}</button>
-            ))}
+          <div className="intro-console">
+            <div className="console-label"><span>Start an investigation</span><small>US equities</small></div>
+            <Search onPick={start} busy={loading} />
+
+            <div className="mode-label">Choose the session</div>
+            <div className="modes" role="radiogroup" aria-label="Which session to investigate">
+              {MODES.map((m) => (
+                <button
+                  key={m.id}
+                  role="radio"
+                  aria-checked={mode === m.id}
+                  className={mode === m.id ? 'mode on' : 'mode'}
+                  onClick={() => changeMode(m.id)}
+                >
+                  <span className="mode-radio" aria-hidden="true" />
+                  <span className="mode-copy"><b>{m.label}</b><span>{m.hint}</span></span>
+                </button>
+              ))}
+            </div>
+
+            <div className="examples">
+              <span>Popular</span>
+              {EXAMPLES.map((t) => (
+                <button key={t} className="chip-btn" onClick={() => start(t)}>{t}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="intro-proof">
+            <div><b>01</b><span>Measure the anomaly</span></div>
+            <div><b>02</b><span>Compare the market</span></div>
+            <div><b>03</b><span>Trace the evidence</span></div>
           </div>
         </section>
 
@@ -240,14 +256,17 @@ export default function App() {
   /* ---------------- Investigation ---------------- */
   const m = inv?.move
   return (
-    <div className="page">
+    <div className="page investigation-page">
       <div className="brand">
-        <b onClick={goHome} style={{ cursor: 'pointer' }}>FinSight</b>
-        <span>Investigation Mode</span>
+        <div className="brand-lockup" onClick={goHome} role="button" tabIndex="0">
+          <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
+          <b>FinSight</b>
+        </div>
+        <span className="brand-mode"><i className="status-dot" />Investigation Mode</span>
       </div>
 
       <div className="toolbar">
-        <button className="ghost" onClick={goHome}>← Change ticker</button>
+        <button className="ghost back-button" onClick={goHome}><span aria-hidden="true">←</span> Change ticker</button>
         <div className="modes inline" role="radiogroup" aria-label="Which session to investigate">
           {MODES.map((mo) => (
             <button
@@ -276,8 +295,9 @@ export default function App() {
 
       {inv && m && (
         <>
-          <section className="card hero">
-            <div>
+          <section className="card hero investigation-hero">
+            <div className="hero-market">
+              <div className="hero-kicker">Selected market event</div>
               <div className="ticker">{inv.company} · {inv.symbol}</div>
               <div className={`move ${m.move_pct >= 0 ? 'up' : 'down'}`}>{pct(m.move_pct)}</div>
               <div className="when">{inv.event_label}</div>
@@ -286,17 +306,22 @@ export default function App() {
                 {inv.freshness.note}
               </div>
             </div>
-            <div>
+            <div className="hero-briefing">
+              <div className="hero-briefing-label">Audio intelligence</div>
+              <h2>Hear the investigation</h2>
+              <p>Get the anomaly, market context, evidence, and uncertainty in one concise briefing.</p>
               <div className="actions">
-                <button onClick={playBriefing} disabled={voice === 'loading'}>
-                  {voice === 'loading' ? 'Generating briefing…' : '▶ Voice briefing'}
+                <button className="briefing-button" onClick={playBriefing} disabled={voice === 'loading'}>
+                  <span className="play-icon" aria-hidden="true">▶</span>
+                  {voice === 'loading' ? 'Generating briefing…' : voice === 'playing' ? 'Replay briefing' : 'Voice briefing'}
                 </button>
               </div>
               {voice.startsWith('error') && <p className="error">{voice}</p>}
-              <p className="pitch">We don't tell you what to invest in. We help you investigate what happened.</p>
+              <p className="pitch"><span aria-hidden="true">◇</span> Evidence-led. No investment recommendations.</p>
             </div>
           </section>
 
+<<<<<<< HEAD
           <Unusualness inv={inv} />
           <Divergence inv={inv} />
 
@@ -313,6 +338,15 @@ export default function App() {
           </section>
 
           <SimilarMoves inv={inv} />
+=======
+          <div className="investigation-flow">
+            <Unusualness inv={inv} />
+            <Divergence inv={inv} />
+            <News inv={inv} />
+            <Explanations exp={exp} loading={expLoading} />
+            <SimilarMoves inv={inv} />
+          </div>
+>>>>>>> f1becbd68253414e96da24c36f469155d00777e6
 
           <p className="disclaimer">
             Historical observation only — not investment advice. Prices: Yahoo Finance. News: The New York Times.
