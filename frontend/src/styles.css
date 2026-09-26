@@ -208,7 +208,16 @@ tr.event td { font-weight: 650; background: var(--wash); }
 /* Evidence timeline */
 .tl-teaser .primary { margin-top: 4px; }
 .tl-title { font-weight: 600; font-size: 14px; }
-.tl-narrative { margin: 14px 0 0; font-size: 15px; color: var(--text-primary); }
+.tl-conclusion {
+  display: flex; gap: 6px; flex-direction: column; margin: 12px 0 0; padding: 12px 14px;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+  background: var(--wash); color: var(--text-secondary); font-size: 13px;
+}
+.tl-conclusion b { color: var(--text-primary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.timing-chip { margin-left: 0; }
+.timing-chip.catalyst { border-color: var(--accent); color: var(--accent); background: rgba(125,224,189,.08); }
+.timing-chip.reaction { border-color: var(--series-2); color: var(--series-2); }
+.timing-chip.background { color: var(--text-muted); background: transparent; }
 
 .tl-verdict { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 4px 0 8px; }
 .tl-verdict.stock { border-left: 3px solid var(--series-1); }

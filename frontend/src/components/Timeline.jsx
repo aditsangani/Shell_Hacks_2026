@@ -1,10 +1,17 @@
 import { useMemo, useState } from 'react'
-import { monthYear, dayMonthLabel, etTime, longDate } from '../format.js'
+import { monthYear, etTime, longDate } from '../format.js'
 
 const SCOPE = {
   stock: { label: 'Stock-specific', color: 'var(--series-1)', lane: 'up', blurb: 'about this company' },
   sector: { label: 'Sector-wide', color: 'var(--series-2)', lane: 'up', blurb: 'about its sector' },
   market: { label: 'Market-wide', color: 'var(--series-3)', lane: 'down', blurb: 'about the market' },
+  unclassified: { label: 'Not yet classified', color: 'var(--muted-bar)', lane: 'up', blurb: 'awaiting triage' },
+}
+const TIMING = {
+  background: { label: 'Background', tone: 'background' },
+  premarket_catalyst: { label: 'Possible pre-market catalyst', tone: 'catalyst' },
+  intraday_catalyst: { label: 'Possible intraday catalyst', tone: 'catalyst' },
+  reaction: { label: 'Post-session context', tone: 'reaction' },
 }
 const RADIUS = { high: 7, medium: 5, low: 3.5 }
 const W = 1000
@@ -89,7 +96,7 @@ function Plot({ tl, selected, onSelect }) {
         {ticks.map((d) => (
           <g key={d.toISOString()}>
             <line x1={xOf(d.toISOString())} x2={xOf(d.toISOString())} y1={AXIS_Y - 84} y2={AXIS_Y + 84} className="tl-grid" />
-            <text x={xOf(d.toISOString())} y={AXIS_Y + 104} className="tl-tick">{monthYear(d.toISOString())}</text>
+            <text x={xOf(d.toISOString())} y={AXIS_Y + 104} className="tl-tick">{monthYear(d.toISOString().slice(0, 10))}</text>
           </g>
         ))}
 
@@ -115,9 +122,11 @@ function Plot({ tl, selected, onSelect }) {
       </svg>
 
       <div className="tl-legend">
-        {Object.entries(SCOPE).map(([k, v]) => (
+        {Object.entries(SCOPE)
+          .filter(([k]) => k !== 'unclassified' || events.some((e) => e.scope === k))
+          .map(([k, v]) => (
           <span key={k}><span className="swatch" style={{ background: v.color }} />{v.label}</span>
-        ))}
+          ))}
         <span className="tl-legend-sep" />
         <span>Dot size = significance · click a dot for detail</span>
       </div>
@@ -152,12 +161,14 @@ function Verdict({ tl }) {
 
 function EventCard({ e, onClose }) {
   const s = SCOPE[e.scope] ?? SCOPE.stock
+  const timing = TIMING[e.timing_role]
   return (
     <div className="tl-detail" style={{ borderLeftColor: s.color }}>
       <button className="tl-close" onClick={onClose} aria-label="Close detail">×</button>
       <div className="tl-detail-meta">
         <span className="chip" style={{ marginLeft: 0 }}>{e.ref}</span>
         <span className="chip" style={{ marginLeft: 0, background: s.color, color: '#fff' }}>{s.label}</span>
+        {timing && <span className={`chip timing-chip ${timing.tone}`}>{timing.label}</span>}
         <span className="chip" style={{ marginLeft: 0 }}>{e.significance} significance</span>
         <span className="tl-detail-date">{etTime(e.pub_date)}</span>
       </div>
@@ -219,8 +230,10 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
         <h2>{tl.company} · {tl.event_label}</h2>
         <p className="sub">
           {tl.pool_size} New York Times article{tl.pool_size === 1 ? '' : 's'} sampled across the{' '}
-          {tl.window.label} before the session{window_tail(tl)}, of which Gemini kept{' '}
-          {tl.events.length} as bearing on the move.
+          {tl.window.label} before the session{window_tail(tl)}.
+          {tl.triage_note
+            ? ` Relevance classification is pending for all ${tl.events.length}.`
+            : ` Gemini kept ${tl.events.length} as bearing on the move.`}
           {counts.stock ? ` ${counts.stock} company-specific.` : ''}
           {counts.market ? ` ${counts.market} market-wide.` : ''}
           {counts.sector ? ` ${counts.sector} sector-wide.` : ''}
@@ -253,7 +266,12 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
               </div>
             )}
             <Verdict tl={tl} />
-            {tl.narrative && <p className="sub tl-narrative">{tl.narrative}</p>}
+            {tl.cause_conclusion && (
+              <div className="tl-conclusion">
+                <b>Timing conclusion</b>
+                <span>{tl.cause_conclusion}</span>
+              </div>
+            )}
             <Plot tl={tl} selected={selected} onSelect={setSelected} />
             {selected
               ? <EventCard e={selected} onClose={() => setSelected(null)} />
@@ -271,8 +289,13 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
               <li key={e.ref} style={{ borderLeftColor: SCOPE[e.scope]?.color }}>
                 <div className="tl-list-meta">
                   <span className="chip" style={{ marginLeft: 0 }}>{e.ref}</span>
-                  <span className="tl-list-date">{dayMonthLabel(e.pub_date)} · {etTime(e.pub_date).split(' ET')[1] ?? ''}</span>
+                  <span className="tl-list-date">{etTime(e.pub_date)}</span>
                   <span className="chip" style={{ marginLeft: 0, color: SCOPE[e.scope]?.color }}>{SCOPE[e.scope]?.label}</span>
+                  {TIMING[e.timing_role] && (
+                    <span className={`chip timing-chip ${TIMING[e.timing_role].tone}`}>
+                      {TIMING[e.timing_role].label}
+                    </span>
+                  )}
                 </div>
                 <a href={e.url} target="_blank" rel="noreferrer">{e.headline}</a>
                 <div className="tl-list-why">{e.why}</div>
@@ -284,7 +307,8 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
 
       <p className="disclaimer">
         Historical observation only — not investment advice. Article selection and reasoning by
-        Gemini, grounded in the coverage shown; every claim links to its source.
+        Gemini, grounded in the coverage shown. Publication timing and causal eligibility are
+        enforced by market-session rules; every article links to its source.
       </p>
     </div>
   )

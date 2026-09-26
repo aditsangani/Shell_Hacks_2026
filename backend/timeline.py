@@ -18,6 +18,7 @@ should never sit through that. The UI polls until the job settles.
 import json
 import threading
 import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from google import genai
@@ -35,6 +36,14 @@ SNIPPET_CHARS = 260
 # After a triage attempt fails (usually a spent daily quota), leave it alone for a while
 # instead of retrying on every page load.
 TRIAGE_RETRY_COOLDOWN = 600  # seconds
+TIMING_SCHEMA_VERSION = 2
+
+TIMING_LABELS = {
+    "background": "Background before the catalyst window",
+    "premarket_catalyst": "Possible pre-market catalyst",
+    "intraday_catalyst": "Possible intraday catalyst",
+    "reaction": "Post-session reaction or context",
+}
 
 PROMPT = """You are an equity research assistant building an evidence timeline for a
 retail investor trying to understand one specific price move. You do NOT give investment
@@ -48,7 +57,8 @@ Investigated session: {event_date} — {symbol} {move_pct:+.2f}% close-to-close
   Unexplained (idiosyncratic) part: {idiosyncratic_pct:+.2f}% of a {ticker_pct:+.2f}% move.
   Our own decomposition puts this at: {verdict} ({verdict_share} of the move is idiosyncratic).
 
-ARTICLES (NYT, {window_days} days of coverage, ids are for citation)
+ARTICLES (NYT, {window_days} days of coverage, ids are for citation; timing labels are
+calculated by the application and must not be changed)
 {articles}
 
 TASK
@@ -64,7 +74,12 @@ Hard rules:
   if the articles clearly point the other way, and explain why there.
 - For each kept article give `scope`: "stock" if it concerns {symbol} specifically, "sector" if it
   is about its sector, "market" if it is a broad macro or market event.
-- Articles published after the session can only be labelled as reaction, never as cause.
+- Only articles marked CAN SUPPORT CAUSAL EXPLANATION may be described as a possible catalyst.
+  An article marked CANNOT EXPLAIN THIS MOVE may be retained as background or reaction, but
+  never described as causing, driving, triggering, or explaining the investigated move.
+- If no kept article can support a causal explanation, explicitly say the available coverage
+  does not identify the cause. Later reporting may corroborate facts, but its publication time
+  prevents it from being evidence that investors reacted to it during this session.
 - `significance`: "high" if a judge should read it, "medium" if relevant background, "low" if weak.
 
 Return JSON only:
@@ -179,11 +194,12 @@ def missing_chunks(event, symbol: str, mode: str, company: str,
 
 
 def _triage(inv: dict, pool: list[dict], verdict: dict, window_days: int) -> dict:
+    timed_pool = _timed_articles(pool, inv)
     prompt = PROMPT.format(
         company=inv["company"], symbol=inv["symbol"],
         sector_etf=inv["sector_etf"] or "n/a", market=inv["market"],
         event_date=inv["event_date"],
-        articles=_article_block(pool), window_days=window_days,
+        articles=_article_block(timed_pool), window_days=window_days,
         sector_line=_sector_line(inv),
         verdict=verdict["verdict"], verdict_share=f"{verdict['share'] * 100:.0f}%",
         **{**inv["move"], **inv["divergence"]},
@@ -194,7 +210,7 @@ def _triage(inv: dict, pool: list[dict], verdict: dict, window_days: int) -> dic
         contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2),
     )
-    return json.loads(resp.text)
+    return _finalize_triage(json.loads(resp.text), timed_pool)
 
 
 def _run_warm(symbol: str, mode: str, inv: dict, log=print) -> None:
@@ -300,8 +316,95 @@ def _article_block(articles: list[dict]) -> str:
     if not articles:
         return "(none found in the window)"
     return "\n".join(
-        f"{a['ref']} [{a['pub_date'][:10]}] {a['headline']} — {a['snippet'][:SNIPPET_CHARS]}"
+        f"{a['ref']} [{a['pub_date']}] [{a['timing_label'].upper()} — "
+        f"{'CAN SUPPORT CAUSAL EXPLANATION' if a['can_explain_move'] else 'CANNOT EXPLAIN THIS MOVE'}] "
+        f"{a['headline']} — {a['snippet'][:SNIPPET_CHARS]}"
         for a in articles)
+
+
+def _fallback_prior_session(event: date) -> date:
+    """Best effort for old payloads; current investigations carry the exact trading day."""
+    prior = event - timedelta(days=1)
+    while prior.weekday() >= 5:
+        prior -= timedelta(days=1)
+    return prior
+
+
+def _published_at(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(market.ET)
+
+
+def classify_article_timing(pub_date: str, event_date: str,
+                            prior_session_date: str | None = None) -> dict:
+    """Classify publication time against regular US market-session boundaries.
+
+    The previous session comes from actual price history, so Monday sessions and exchange
+    holidays do not accidentally discard weekend or holiday-weekend catalysts.
+    """
+    event = date.fromisoformat(event_date)
+    prior = (date.fromisoformat(prior_session_date) if prior_session_date
+             else _fallback_prior_session(event))
+    published = _published_at(pub_date)
+    prior_close = datetime.combine(prior, market.SESSION_CLOSE, tzinfo=market.ET)
+    event_open = datetime.combine(event, market.SESSION_OPEN, tzinfo=market.ET)
+    event_close = datetime.combine(event, market.SESSION_CLOSE, tzinfo=market.ET)
+
+    if published <= prior_close:
+        role, eligible = "background", False
+    elif published < event_open:
+        role, eligible = "premarket_catalyst", True
+    elif published <= event_close:
+        role, eligible = "intraday_catalyst", True
+    else:
+        role, eligible = "reaction", False
+    return {
+        "timing_role": role,
+        "timing_label": TIMING_LABELS[role],
+        "can_explain_move": eligible,
+    }
+
+
+def _timed_articles(pool: list[dict], inv: dict) -> list[dict]:
+    return [
+        {**article, **classify_article_timing(
+            article["pub_date"], inv["event_date"], inv.get("prior_session_date"))}
+        for article in pool
+    ]
+
+
+def _finalize_triage(triaged: dict, timed_pool: list[dict]) -> dict:
+    """Apply causal constraints after Gemini returns, rather than relying on its wording."""
+    by_ref = {article["ref"]: article for article in timed_pool}
+    kept = [by_ref.get(str(event.get("ref", "")).strip())
+            for event in triaged.get("events", [])]
+    eligible = [article for article in kept if article and article["can_explain_move"]]
+
+    triaged["timing_schema"] = TIMING_SCHEMA_VERSION
+    if eligible:
+        count = len(eligible)
+        triaged["narrative"] = (
+            f"{count} selected article{'s were' if count != 1 else ' was'} published inside "
+            "the possible catalyst window. The timing makes those articles plausible "
+            "catalysts, but publication timing and coverage alone do not prove causation. "
+            "Other selected articles are shown only as background or later context."
+        )
+        triaged["verdict_note"] = (
+            "Possible catalysts are identified by publication time; the scope verdict remains "
+            "grounded in the beta-adjusted price decomposition."
+        )
+    else:
+        triaged["narrative"] = (
+            "The available coverage does not identify a published catalyst before or during "
+            "this market session. Articles shown from later in the timeline are reaction or "
+            "context, not evidence of what caused the move."
+        )
+        triaged["verdict_note"] = (
+            "No article in the eligible pre-market or intraday window confirms a cause."
+        )
+    return triaged
 
 
 def _sector_line(inv: dict) -> str:
@@ -336,15 +439,17 @@ def _triage_failure(e: Exception) -> tuple[bool, str]:
     return False, f"Gemini call failed: {scrub(e)[:200]}"
 
 
-def _unstaged(pool: list[dict], note: str) -> list[dict]:
+def _unstaged(pool: list[dict], inv: dict, note: str) -> list[dict]:
     """Show the sampled articles even when triage could not run.
 
     The articles are real evidence, so hiding them because the model is unavailable would
     throw away the one part of this page that does not need a key.
     """
-    return [{"ref": a["ref"], "scope": "stock", "significance": "low",
+    return [{"ref": a["ref"], "scope": "unclassified", "significance": "low",
              "why": note, "thesis": "", "pub_date": a["pub_date"],
-             "headline": a["headline"], "url": a["url"], "snippet": a["snippet"]}
+             "headline": a["headline"], "url": a["url"], "snippet": a["snippet"],
+             **classify_article_timing(a["pub_date"], inv["event_date"],
+                                       inv.get("prior_session_date"))}
             for a in pool]
 
 
@@ -369,6 +474,10 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
     for i, a in enumerate(pool, start=1):
         a.setdefault("ref", f"A{i}")
     triaged = _read_json(_triage_path(symbol, event, mode))
+    if triaged and triaged.get("timing_schema") != TIMING_SCHEMA_VERSION:
+        # Prompt-only timing rules proved too easy for the model to violate. Re-triage old
+        # cache entries once under the deterministic timing schema.
+        triaged = None
     if refresh:
         triaged = None
 
@@ -420,6 +529,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         "freshness": inv["freshness"],
         "events": [],
         "narrative": "",
+        "cause_conclusion": "",
         "caveat": "",
     }
 
@@ -440,24 +550,43 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         payload["quota_exhausted"] = quota
         payload["triage_note"] = job.get("note") or (
             "Not triaged yet." if warming else "Not triaged — Gemini was unavailable.")
-        payload["events"] = _unstaged(pool, "Not triaged yet." if warming
+        payload["events"] = _unstaged(pool, inv, "Not triaged yet." if warming
                                       else "Not triaged — Gemini was unavailable.")
+        payload["cause_conclusion"] = (
+            "Article timing is shown, but relevance triage must finish before drawing a "
+            "conclusion about possible catalysts."
+        )
         return payload
 
-    by_ref = {a["ref"]: a for a in pool}
+    timed_pool = _timed_articles(pool, inv)
+    by_ref = {a["ref"]: a for a in timed_pool}
     events = []
     for e in triaged.get("events", []):
         art = by_ref.get(str(e.get("ref", "")).strip())
         if not art:
             continue  # only citations that resolve to a real article are shown
+        timing_role = art["timing_role"]
+        eligible = art["can_explain_move"]
+        why = e.get("why", "")
+        thesis = e.get("thesis", "")
+        if not eligible:
+            if timing_role == "reaction":
+                why = ("Published after the investigated session; retained as reaction or "
+                       "later context, not as evidence of what caused the move.")
+            else:
+                why = ("Published before the catalyst window; retained as background, not "
+                       "as evidence of what caused this specific session's move.")
+            thesis = ""
         events.append({
             "ref": art["ref"],
             "scope": e.get("scope") if e.get("scope") in SCOPES else "stock",
             "significance": e.get("significance") if e.get("significance") in
                             ("high", "medium", "low") else "medium",
-            "why": e.get("why", ""), "thesis": e.get("thesis", ""),
+            "why": why, "thesis": thesis,
             "pub_date": art["pub_date"], "headline": art["headline"],
             "url": art["url"], "snippet": art["snippet"],
+            "timing_role": timing_role, "timing_label": art["timing_label"],
+            "can_explain_move": eligible,
         })
     events.sort(key=lambda e: e["pub_date"])
 
@@ -465,6 +594,18 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
     payload["narrative"] = triaged.get("narrative", "")
     payload["caveat"] = triaged.get("caveat", "")
     payload["verdict_note"] = triaged.get("verdict_note", "")
+    catalyst_count = sum(1 for event in events if event["can_explain_move"])
+    if catalyst_count:
+        payload["cause_conclusion"] = (
+            f"{catalyst_count} selected article{'s fall' if catalyst_count != 1 else ' falls'} "
+            "inside the possible catalyst window. Timing makes causal relevance possible, "
+            "but does not prove causation."
+        )
+    else:
+        payload["cause_conclusion"] = (
+            "The available coverage does not identify a published catalyst before or during "
+            "this market session. Later articles are reaction or context."
+        )
     if triaged.get("verdict") and triaged["verdict"] != verdict["verdict"]:
         # The model disagreed with the arithmetic. Keep the arithmetic as the headline
         # verdict and surface the disagreement rather than silently swapping it.

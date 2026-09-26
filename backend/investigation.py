@@ -92,6 +92,7 @@ def build(symbol: str, mode: str = "latest", company: str | None = None,
 
     closes = prices.daily_closes(tuple(symbols), fresh=fresh)
     event, latest = resolve_event(closes, symbol, mode)
+    prior_session = market.previous_session(closes.index, event)
     freshness = market.describe(event, mode, latest=latest)
 
     series, chart_source, chart_caveat = _intraday(event, closes, symbols, fresh=fresh)
@@ -114,6 +115,7 @@ def build(symbol: str, mode: str = "latest", company: str | None = None,
         "market": MARKET_PROXY,
         "mode": mode,
         "event_date": event.isoformat(),
+        "prior_session_date": prior_session.isoformat() if prior_session else None,
         "event_label": freshness["event_label"],
         "event_short": freshness["event_short"],
         "freshness": freshness,
