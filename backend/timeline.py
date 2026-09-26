@@ -26,6 +26,7 @@ from google.genai import types
 
 import market
 import news
+import conclusion
 from config import GEMINI_API_KEY, GEMINI_MODEL, scrub
 from language_guard import guard_report, guard_statement
 
@@ -97,29 +98,7 @@ Return JSON only:
 """
 
 
-def scope_verdict(div: dict) -> dict:
-    """Stock-specific vs market-wide, from the beta-adjusted decomposition.
-
-    Grounded in arithmetic rather than in the model's reading of a headline: the share of
-    the move that the market's beta does not explain.
-    """
-    total = abs(div.get("ticker_pct") or 0.0)
-    idio = abs(div.get("idiosyncratic_pct") or 0.0)
-    if total < 1e-9:
-        return {"verdict": "flat", "share": 0.0, "label": "No material move",
-                "raw_share": 0.0, "against_market": False}
-    raw = idio / total
-    # The ratio can exceed 1 when the market's beta implies a move in the *opposite*
-    # direction, which makes the move more stock-specific, not less. Clamp for display.
-    share = min(1.0, raw)
-    if share >= 0.6:
-        verdict, label = "stock_specific", "Stock-specific"
-    elif share <= 0.35:
-        verdict, label = "market_wide", "Market-wide"
-    else:
-        verdict, label = "mixed", "Mixed"
-    return {"verdict": verdict, "share": round(share, 3), "label": label,
-            "raw_share": round(raw, 3), "against_market": raw > 1.0}
+scope_verdict = conclusion.scope_verdict
 
 
 # ------------------------------------------------------------------ cached artefacts
@@ -553,6 +532,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
                                  "It resets at midnight ET; Yahoo and SEC evidence was still checked.")
         else:
             payload["caveat"] = "No relevant evidence was found across NYT, Yahoo Finance, or SEC EDGAR."
+        payload["conclusion"] = conclusion.build(inv, payload)
         return payload
 
     if triaged is None:
@@ -566,6 +546,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         payload["cause_conclusion"] = (
             "Relevance triage must finish before drawing a conclusion about possible catalysts."
         )
+        payload["conclusion"] = conclusion.build(inv, payload)
         return payload
 
     timed_pool = _timed_articles(pool, inv)
@@ -652,6 +633,7 @@ def build(symbol: str, mode: str, inv: dict, refresh: bool = False, log=print) -
         payload["verdict_note"] = (f"Gemini read the evidence as {triaged['verdict']}, but the "
                                    f"beta-adjusted decomposition ({verdict['share'] * 100:.0f}% "
                                    f"idiosyncratic) is shown above. " + payload["verdict_note"])
+    payload["conclusion"] = conclusion.build(inv, payload)
     return payload
 
 

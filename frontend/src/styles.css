@@ -586,6 +586,27 @@ h2 { position: relative; z-index: 1; margin: 8px 0 18px; font-size: clamp(20px, 
 .evidence { margin: 9px 0 0; padding: 7px 0 7px 13px; border-left-color: #345048; color: #bdcccb; font-size: 11px; }
 .evidence .why { margin-top: 3px; color: #6f858a; }
 
+.conclusion-card { border-color: var(--border-strong); }
+.conclusion-heading {
+  position: relative; z-index: 1; display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 18px; margin-bottom: 22px;
+}
+.conclusion-heading h2 { margin-bottom: 0; }
+.conclusion-status {
+  flex: none; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--wash); color: var(--accent); font-size: 9px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.conclusion-status.untriaged,
+.conclusion-status.pending { border-color: var(--border); color: var(--text-muted); background: var(--surface-soft); }
+.conclusion-points { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--border); }
+.conclusion-points > div { padding: 20px 22px 20px 0; border-bottom: 1px solid var(--border); }
+.conclusion-points > div:nth-child(odd) { padding-right: 28px; border-right: 1px solid var(--border); }
+.conclusion-points > div:nth-child(even) { padding-left: 28px; }
+.conclusion-points span { color: var(--text-muted); font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.conclusion-points p { margin: 7px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.72; }
+.conclusion-caveat { position: relative; z-index: 1; margin: 18px 0 0; }
+
 .table-wrap { overflow: hidden; margin-top: 22px; border: 1px solid var(--border); border-radius: 9px; }
 table { font-size: 12px; }
 th { padding: 12px 14px; border-bottom-color: var(--border); background: rgba(5,13,18,.35); color: #73898e; font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
@@ -692,6 +713,12 @@ tr.event td { background: rgba(125,224,189,.07); }
   .tiles { grid-template-columns: 1fr 1fr; gap: 7px; }
   .tile { min-height: 89px; padding: 12px; }
   .tile .value { font-size: 16px; }
+  .conclusion-heading { display: block; }
+  .conclusion-status { display: inline-flex; margin-top: 5px; }
+  .conclusion-points { grid-template-columns: 1fr; }
+  .conclusion-points > div,
+  .conclusion-points > div:nth-child(odd),
+  .conclusion-points > div:nth-child(even) { padding: 16px 0; border-right: 0; }
   .cmp { grid-template-columns: 56px 1fr 60px; padding: 13px; gap: 9px; }
   .news li { grid-template-columns: 37px 1fr; gap: 11px; }
   .table-wrap { border-radius: 7px; overflow-x: auto; }

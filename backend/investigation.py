@@ -3,6 +3,7 @@
 import pandas as pd
 
 import analysis
+import conclusion
 import db
 import market
 import news
@@ -106,7 +107,7 @@ def build(symbol: str, mode: str = "latest", company: str | None = None,
         bar_times = pd.Series(wide.index)
 
     company = company or prices.resolve_company(symbol)
-    return {
+    bundle = {
         "symbol": symbol,
         "company": company,
         "sector_etf": sector_etf,
@@ -127,3 +128,5 @@ def build(symbol: str, mode: str = "latest", company: str | None = None,
         "headlines": _headlines(event, bar_times, symbol, company),
         "similar": analysis.similar_moves(closes[symbol].dropna(), event),
     }
+    bundle["conclusion"] = conclusion.build(bundle)
+    return bundle

@@ -6,6 +6,7 @@ import Divergence from './components/Divergence.jsx'
 import SimilarMoves from './components/SimilarMoves.jsx'
 import Timeline from './components/Timeline.jsx'
 import ThemeToggle from './components/ThemeToggle.jsx'
+import Conclusion from './components/Conclusion.jsx'
 
 const MODES = [
   { id: 'latest', label: 'Latest session', hint: 'The most recent completed trading day.' },
@@ -116,7 +117,7 @@ export default function App() {
   useEffect(() => {
     if (!route) return
     load()
-    if (route.view === 'timeline') loadTimeline()
+    loadTimeline()
   }, [route, load, loadTimeline])
 
   useEffect(() => {
@@ -126,6 +127,8 @@ export default function App() {
   }, [])
 
   function start(symbol) {
+    setTl(null)
+    setTlError(null)
     const next = { symbol, mode, view: 'investigation' }
     writeRoute(next)
     setRoute(next)
@@ -134,6 +137,8 @@ export default function App() {
   function changeMode(next) {
     setMode(next)
     if (route) {
+      setTl(null)
+      setTlError(null)
       const r = { ...route, mode: next }
       writeRoute(r)
       setRoute(r)
@@ -264,8 +269,7 @@ export default function App() {
         </section>
 
         <p className="disclaimer">
-          Prices: Yahoo Finance · Evidence: NYT, Yahoo Finance News, SEC EDGAR · Explanations: Gemini.
-          Historical observation only — not investment advice.
+          Data: Yahoo Finance · Evidence: NYT, Yahoo Finance News, SEC EDGAR · AI triage: Gemini · Not investment advice.
         </p>
       </div>
     )
@@ -386,11 +390,18 @@ export default function App() {
             </section>
 
             <SimilarMoves inv={inv} />
+            <Conclusion
+              timelineError={tlError}
+              conclusion={
+                tl?.symbol === inv.symbol && tl?.mode === inv.mode
+                  ? tl.conclusion || inv.conclusion
+                  : inv.conclusion
+              }
+            />
           </div>
 
           <p className="disclaimer">
-            Historical observation only — not investment advice. Prices: Yahoo Finance. Evidence: NYT, Yahoo Finance News, and SEC EDGAR.
-            Explanations: Gemini, grounded in the evidence shown.
+            Data: Yahoo Finance · Evidence: NYT, Yahoo Finance News, SEC EDGAR · AI triage: Gemini · Not investment advice.
           </p>
         </>
       )}

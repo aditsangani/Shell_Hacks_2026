@@ -332,9 +332,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack, 
       )}
 
       <p className="disclaimer">
-        Historical observation only — not investment advice. Article selection and reasoning by
-        Gemini, grounded in NYT and Yahoo Finance reporting plus SEC filings. Publication timing and causal eligibility are
-        enforced by market-session rules; every evidence item links to its source.
+        Evidence: NYT, Yahoo Finance News, SEC EDGAR · AI triage: Gemini · Deterministic timing rules · Not investment advice.
       </p>
     </div>
   )

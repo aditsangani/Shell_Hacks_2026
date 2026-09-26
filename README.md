@@ -10,7 +10,12 @@ Search any traded ticker, pick which session to investigate, and get a deep-dive
 2. **Company or market:** ticker vs its sector ETF vs SPY, intraday, with a beta-adjusted idiosyncratic move
 3. **Evidence timeline** — NYT and Yahoo Finance reporting plus SEC filings, deduplicated and ranked before Gemini triages the items that bear on the move
 4. **Has this happened before:** the closest past moves and their +1/+5/+20-day returns
-5. **Voice briefing:** ElevenLabs TTS
+5. **Deterministic conclusion:** a rules-based synthesis of the move, market decomposition, time-filtered evidence, and historical comparisons
+6. **Voice briefing:** ElevenLabs TTS
+
+The conclusion makes no additional Gemini request. It renders immediately from the price
+calculations, then updates when the existing timeline triage finishes. If triage is unavailable,
+it withholds any catalyst claim while preserving the numerical market analysis.
 
 ## Which session gets investigated
 
