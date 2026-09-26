@@ -1,0 +1,22 @@
+# DigitalOcean App Platform spec. Deploy: doctl apps create --spec .do/app.yaml
+# Uses the free *.ondigitalocean.app subdomain (no custom domain).
+name: finsight
+region: nyc
+services:
+  - name: web
+    dockerfile_path: Dockerfile
+    github:
+      repo: aditsangani/Shell_Hacks_2026
+      branch: main
+      deploy_on_push: true
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /api/health
+    envs:
+      - { key: DATABASE_URL, scope: RUN_TIME, type: SECRET }
+      - { key: NYT_API_KEY, scope: RUN_TIME, type: SECRET }
+      - { key: GEMINI_API_KEY, scope: RUN_TIME, type: SECRET }
+      - { key: ELEVENLABS_API_KEY, scope: RUN_TIME, type: SECRET }
+      - { key: GEMINI_MODEL, scope: RUN_TIME, value: gemini-2.5-flash }
