@@ -5,6 +5,7 @@ import Unusualness from './components/Unusualness.jsx'
 import Divergence from './components/Divergence.jsx'
 import SimilarMoves from './components/SimilarMoves.jsx'
 import Timeline from './components/Timeline.jsx'
+import ThemeToggle from './components/ThemeToggle.jsx'
 
 const MODES = [
   { id: 'latest', label: 'Latest session', hint: 'The most recent completed trading day.' },
@@ -37,6 +38,11 @@ function writeRoute(route) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    const saved = window.localStorage.getItem('finsight-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  })
   const [route, setRoute] = useState(readRoute)
   const [mode, setMode] = useState('latest')
   const [inv, setInv] = useState(null)
@@ -48,6 +54,15 @@ export default function App() {
   const [tlError, setTlError] = useState(null)
   const [warming, setWarming] = useState(false)
   const audioRef = useRef(null)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem('finsight-theme', theme)
+  }, [theme])
+
+  function toggleTheme() {
+    setTheme((current) => current === 'dark' ? 'light' : 'dark')
+  }
 
   const params = useCallback(
     () => new URLSearchParams({ symbol: route.symbol, mode: route.mode }),
@@ -196,7 +211,10 @@ export default function App() {
             <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
             <b>FinSight</b>
           </div>
-          <span className="brand-mode"><i className="status-dot" />Investigation Mode</span>
+          <div className="brand-actions">
+            <span className="brand-mode"><i className="status-dot" />Investigation Mode</span>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          </div>
         </div>
 
         <section className="card intro">
@@ -263,6 +281,8 @@ export default function App() {
         warming={warming}
         onWarm={warmTimeline}
         onBack={() => go('investigation')}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
     )
   }
@@ -276,7 +296,10 @@ export default function App() {
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
           <b>FinSight</b>
         </div>
-        <span className="brand-mode"><i className="status-dot" />Investigation Mode</span>
+        <div className="brand-actions">
+          <span className="brand-mode"><i className="status-dot" />Investigation Mode</span>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+        </div>
       </div>
 
       <div className="toolbar">

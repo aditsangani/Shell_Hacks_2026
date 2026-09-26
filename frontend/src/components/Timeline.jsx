@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { monthYear, etTime, longDate } from '../format.js'
+import ThemeToggle from './ThemeToggle.jsx'
 
 const SCOPE = {
   stock: { label: 'Stock-specific', color: 'var(--series-1)', lane: 'up', blurb: 'about this company' },
@@ -178,13 +179,16 @@ function EventCard({ e, onClose }) {
   )
 }
 
-export default function Timeline({ tl, loading, error, onWarm, warming, onBack }) {
+export default function Timeline({ tl, loading, error, onWarm, warming, onBack, theme, onToggleTheme }) {
   const [selected, setSelected] = useState(null)
 
   if (error) {
     return (
       <div className="page">
-        <button className="ghost" onClick={onBack}>← Back to the investigation</button>
+        <div className="toolbar">
+          <button className="ghost" onClick={onBack}>← Back to the investigation</button>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        </div>
         <div className="card"><p className="error">{error}</p></div>
       </div>
     )
@@ -192,7 +196,10 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
   if (loading || !tl) {
     return (
       <div className="page">
-        <button className="ghost" onClick={onBack}>← Back to the investigation</button>
+        <div className="toolbar">
+          <button className="ghost" onClick={onBack}>← Back to the investigation</button>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        </div>
         <div className="card"><p className="loading">Building the evidence timeline…</p></div>
       </div>
     )
@@ -210,6 +217,7 @@ export default function Timeline({ tl, loading, error, onWarm, warming, onBack }
             {tl.pool_size === 0 ? 'Load articles' : tl.pending_requests > 0 ? 'Finish sampling' : '↻ Re-sample'}
           </button>
         )}
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
       </div>
 
       {tl.warming && (
