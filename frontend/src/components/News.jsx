@@ -7,7 +7,11 @@ export default function News({ inv }) {
       <div className="step">3 · What was published</div>
       <h2>{items.length} NYT headline{items.length === 1 ? '' : 's'} around the move</h2>
       {items.length === 0 ? (
-        <p className="loading">No headlines cached. Run <code>python ingest.py</code> with NYT_API_KEY set.</p>
+        <p className="loading">
+          No New York Times coverage matched {inv.symbol} in the three days around this session.
+          Headlines load when <code>NYT_API_KEY</code> is set; they also depend on the NYT
+          archive having covered this company that week.
+        </p>
       ) : (
         <ul className="news">
           {items.map((h) => (

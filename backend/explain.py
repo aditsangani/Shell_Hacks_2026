@@ -5,23 +5,23 @@ import json
 from google import genai
 from google.genai import types
 
-from config import DEMO, GEMINI_API_KEY, GEMINI_MODEL
+from config import GEMINI_API_KEY, GEMINI_MODEL
 
 PROMPT = """You are an equity research assistant helping a retail investor understand
 why a stock moved. You do NOT give investment advice or predictions.
 
-Stock: {company} ({symbol}), sector ETF {sector_etf} ({sector_name}), market proxy {market}.
+Stock: {company} ({symbol}), market proxy {market}.
 Event day: {event_date}.
-
+{sector_line}
 DATA
 - Move: {symbol} {move_pct:+.2f}% close-to-close. Bigger than {percentile}% of its daily
   moves over the prior {history_days} trading days (z-score {z_score}). Typical absolute
   daily move: {typical_abs_move}%. Largest same-direction move since: {largest_since}.
-- Same day: {sector_etf} {sector_pct:+.2f}%, {market} {market_pct:+.2f}%.
-  Excess vs sector {excess_vs_sector:+.2f} pts, vs market {excess_vs_market:+.2f} pts.
+- Same day: {market} {market_pct:+.2f}%. Excess vs market {excess_vs_market:+.2f} pts.
   1y beta to {market}: {beta_1y}, so the market alone implies {beta_expected_pct:+.2f}%;
-  unexplained (idiosyncratic) part: {idiosyncratic_pct:+.2f}%.
-  Note: {symbol} is a large weight in {sector_etf}, so part of the sector move may be {symbol} itself.
+  unexplained (idiosyncratic) part: {idiosyncratic_pct:+.2f}%.{beta_note}
+- The move above is a single completed trading session. If headlines describe events that
+  happened after that session, do not present them as the cause.
 
 HEADLINES (NYT, UTC timestamps; ids are for citation)
 {headlines}
@@ -43,6 +43,11 @@ Return JSON only:
 DATA_REFS = {"percentile", "divergence", "beta", "sector"}
 
 
+def _refs_for(inv: dict) -> set[str]:
+    """"sector" is only citable when we actually have a sector comparison."""
+    return DATA_REFS - {"sector"} if not inv.get("sector_known") else DATA_REFS
+
+
 def _headline_block(headlines: list[dict]) -> str:
     if not headlines:
         return "(none found in the window)"
@@ -50,10 +55,29 @@ def _headline_block(headlines: list[dict]) -> str:
                      for h in headlines)
 
 
-def explain(stats: dict, div: dict, headlines: list[dict]) -> dict:
+def _sector_lines(inv: dict, div: dict) -> tuple[str, str]:
+    """(context line for the prompt, extra beta note). Empty strings when sector is unknown."""
+    if not inv.get("sector_known"):
+        return ("- No sector ETF comparison: this ticker's sector is not in our map, so it is "
+                "compared against the market proxy only.\n", "")
+    return (f"- Sector: {inv['sector_name']} ({inv['sector_etf']}) moved {div['sector_pct']:+.2f}%, "
+            f"so excess vs sector is {div['excess_vs_sector']:+.2f} pts.\n",
+            f" Note {inv['symbol']} is a large weight in {inv['sector_etf']}, so part of the "
+            f"sector's move may be {inv['symbol']} itself.")
+
+
+def explain(inv: dict) -> dict:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not set")
-    prompt = PROMPT.format(**DEMO, **stats, **div, headlines=_headline_block(headlines))
+    sector_line, beta_note = _sector_lines(inv, inv["divergence"])
+    move = dict(inv["move"])
+    move["largest_since"] = move["largest_since"] or "not repeated in this history"
+    prompt = PROMPT.format(
+        symbol=inv["symbol"], company=inv["company"], market=inv["market"],
+        event_date=inv["event_date"], sector_line=sector_line, beta_note=beta_note,
+        headlines=_headline_block(inv.get("headlines") or []),
+        **{**move, **inv["divergence"]},
+    )
 
     client = genai.Client(api_key=GEMINI_API_KEY)
     resp = client.models.generate_content(
@@ -64,7 +88,8 @@ def explain(stats: dict, div: dict, headlines: list[dict]) -> dict:
     result = json.loads(resp.text)
 
     # Keep only citations that resolve; attach the real headline so the UI shows evidence, not claims.
-    by_id = {h["id"]: h for h in headlines}
+    by_id = {h["id"]: h for h in inv.get("headlines") or []}
+    allowed = _refs_for(inv)
     for exp in result.get("explanations", []):
         resolved = []
         for ev in exp.get("evidence", []):
@@ -72,7 +97,7 @@ def explain(stats: dict, div: dict, headlines: list[dict]) -> dict:
             if ref in by_id:
                 resolved.append({"kind": "headline", "ref": ref, "why": ev.get("why", ""),
                                  "headline": by_id[ref]})
-            elif ref in DATA_REFS:
+            elif ref in allowed:
                 resolved.append({"kind": "data", "ref": ref, "why": ev.get("why", "")})
         exp["evidence"] = resolved
     return result

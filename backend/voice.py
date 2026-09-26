@@ -16,11 +16,18 @@ def briefing_script(inv: dict, explanations: dict | None) -> str:
     direction = "rose" if m["move_pct"] > 0 else "fell"
     lines = [
         f"Here's your briefing on {inv['company']}.",
-        f"On {inv['event_label']}, {inv['symbol']} {direction} {abs(m['move_pct']):.1f} percent.",
+        f"On {inv['event_short']}, {inv['symbol']} {direction} {abs(m['move_pct']):.1f} percent.",
         f"That's bigger than {m['percentile']:.0f} percent of its daily moves over the past five years.",
-        f"The {inv['sector_name']} sector moved {d['sector_pct']:+.1f} percent and the S&P 500 "
-        f"{d['market_pct']:+.1f} percent, so most of this move was specific to {inv['symbol']}.",
     ]
+    if inv.get("sector_known"):
+        lines.append(
+            f"The {inv['sector_name']} sector moved {d['sector_pct']:+.1f} percent and the "
+            f"S&P 500 {d['market_pct']:+.1f} percent, so most of this move was specific to "
+            f"{inv['symbol']}.")
+    else:
+        lines.append(
+            f"The S&P 500 moved {d['market_pct']:+.1f} percent, leaving "
+            f"{d['idiosyncratic_pct']:+.1f} percent specific to {inv['symbol']}.")
     exps = (explanations or {}).get("explanations") or []
     if exps:
         lines.append(f"The most likely explanation: {exps[0]['title']}. {exps[0]['summary']}")

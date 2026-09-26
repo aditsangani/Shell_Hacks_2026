@@ -1,4 +1,8 @@
-"""NYT Article Search. 500 req/day, 5/min — results are cached (Tiger Data, else a local JSON file)."""
+"""NYT Article Search. 500 req/day, 5/min — results are cached (Tiger Data, else a local JSON file).
+
+Cache is keyed by symbol *and* event date, so a multi-ticker demo does not re-query the API
+for a session another ticker already warmed.
+"""
 
 import json
 import time
@@ -9,15 +13,12 @@ import pandas as pd
 import requests
 
 import db
-from config import DEMO, NYT_API_KEY
+import market
+from config import NYT_API_KEY
 
 NYT_URL = "https://api.nytimes.com/svc/search/v2/articlesearch.json"
 CACHE_DIR = Path(__file__).parent / ".cache"
-
-
-def news_window(event_date: date) -> tuple[date, date]:
-    # Covers a weekend before a Monday event plus the day after.
-    return event_date - timedelta(days=3), event_date + timedelta(days=1)
+RATE_LIMIT_PAUSE = 12  # seconds between queries; NYT allows 5/min
 
 
 def _fetch_nyt(query: str, begin: date, end: date) -> list[dict]:
@@ -38,37 +39,60 @@ def _fetch_nyt(query: str, begin: date, end: date) -> list[dict]:
     } for d in docs if d.get("pub_date") and d.get("web_url")]
 
 
-def fetch_and_store(event_date: date) -> list[dict]:
+def queries_for(symbol: str, company: str) -> list[str]:
+    """Search terms for a ticker: the company name plus the symbol itself."""
+    name = (company or "").strip()
+    if name and name.lower() != symbol.lower():
+        return [name, symbol]
+    return [symbol]
+
+
+def fetch_and_store(event_date: date, symbol: str, company: str = "") -> list[dict]:
     if not NYT_API_KEY:
         raise RuntimeError("NYT_API_KEY is not set")
-    begin, end = news_window(event_date)
+    begin, end = market.search_window(event_date)
     by_url = {}
-    for i, q in enumerate(DEMO["news_queries"]):
+    terms = queries_for(symbol, company)
+    for i, q in enumerate(terms):
         if i:
-            time.sleep(12)  # stay under 5 req/min
+            time.sleep(RATE_LIMIT_PAUSE)
         for a in _fetch_nyt(q, begin, end):
             by_url.setdefault(a["url"], a)
     articles = sorted(by_url.values(), key=lambda a: a["pub_date"])
 
     if db.ENABLED:
-        db.upsert_news(DEMO["symbol"], articles)
+        try:
+            db.upsert_news(symbol, articles)
+        except Exception:
+            pass  # the local cache below is still worth writing
     CACHE_DIR.mkdir(exist_ok=True)
-    _cache_path(event_date).write_text(json.dumps(articles, indent=2))
+    _cache_path(symbol, event_date).write_text(json.dumps(articles, indent=2))
     return articles
 
 
-def get_news(event_date: date) -> list[dict]:
+def get_news(event_date: date, symbol: str, company: str = "") -> list[dict]:
     """Cached headlines for the event window; hits the NYT API only on a cold cache."""
-    begin, end = news_window(event_date)
     if db.ENABLED:
-        articles = db.load_news(DEMO["symbol"], begin, end + timedelta(days=1))
-        if articles:
-            return articles
-    path = _cache_path(event_date)
+        try:
+            begin, end = market.search_window(event_date)
+            articles = db.load_news(symbol, begin, end + timedelta(days=1))
+            if articles:
+                return articles
+        except Exception:
+            pass
+    path = _cache_path(symbol, event_date)
     if path.exists():
-        return json.loads(path.read_text())
-    return fetch_and_store(event_date) if NYT_API_KEY else []
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            path.unlink(missing_ok=True)
+    if not NYT_API_KEY:
+        return []
+    try:
+        return fetch_and_store(event_date, symbol, company)
+    except Exception:
+        return []  # never let a news failure take down the investigation
 
 
-def _cache_path(event_date: date) -> Path:
-    return CACHE_DIR / f"news_{DEMO['symbol']}_{event_date.isoformat()}.json"
+def _cache_path(symbol: str, event_date: date) -> Path:
+    return CACHE_DIR / f"news_{symbol.upper()}_{event_date.isoformat()}.json"

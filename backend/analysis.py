@@ -1,7 +1,5 @@
 """Unusualness, divergence, and historical-similarity math on daily closes."""
 
-from datetime import date
-
 import numpy as np
 import pandas as pd
 
@@ -12,14 +10,24 @@ def daily_returns(closes: pd.Series) -> pd.Series:
     return (closes.pct_change() * 100).dropna()
 
 
-def move_stats(closes: pd.Series, event_date: date) -> dict:
+def _as_date(value):
+    return value if hasattr(value, "isoformat") else pd.Timestamp(value).date()
+
+
+def move_stats(closes: pd.Series, event_date) -> dict:
     """How unusual is the event-day move vs the prior 5 years of daily moves."""
+    event_date = _as_date(event_date)
     rets = daily_returns(closes)
+    if event_date not in rets.index:
+        raise ValueError(f"no trading data for {event_date}")
     move = float(rets.loc[event_date])
     history = rets.loc[rets.index < event_date]
+    if len(history) < 30:
+        raise ValueError("not enough prior history to judge how unusual this move was")
 
     percentile = float((history.abs() < abs(move)).mean() * 100)
-    z = float((move - history.mean()) / history.std())
+    std = float(history.std())
+    z = (move - float(history.mean())) / std if std else 0.0
 
     same_or_bigger = history[(np.sign(history) == np.sign(move)) & (history.abs() >= abs(move))]
     last_bigger = same_or_bigger.index[-1] if len(same_or_bigger) else None
@@ -44,30 +52,44 @@ def move_stats(closes: pd.Series, event_date: date) -> dict:
     }
 
 
-def divergence(closes: pd.DataFrame, event_date: date, symbol: str, sector: str, market: str) -> dict:
-    """Ticker vs sector ETF vs SPY on the event day, plus a beta-adjusted expected move."""
+def divergence(closes: pd.DataFrame, event_date, symbol: str,
+               sector: str | None, market: str) -> dict:
+    """Ticker vs sector ETF vs SPY on the event day, plus a beta-adjusted expected move.
+
+    `sector` is optional; without it the sector fields are None and the UI drops that line.
+    """
+    event_date = _as_date(event_date)
     rets = closes.pct_change() * 100
+    if event_date not in rets.index:
+        raise ValueError(f"no trading data for {event_date}")
     day = rets.loc[event_date]
 
     trailing = rets.loc[rets.index < event_date].tail(252).dropna()
-    beta = float(np.cov(trailing[symbol], trailing[market])[0, 1] / trailing[market].var())
-    expected = beta * float(day[market])
+    if market not in trailing or len(trailing) < 30:
+        beta, expected = 1.0, 0.0
+    else:
+        beta = float(np.cov(trailing[symbol], trailing[market])[0, 1] / trailing[market].var())
+        expected = beta * float(day[market])
 
-    return {
+    out = {
         "ticker_pct": round(float(day[symbol]), 2),
-        "sector_pct": round(float(day[sector]), 2),
+        "sector_pct": round(float(day[sector]), 2) if sector else None,
         "market_pct": round(float(day[market]), 2),
-        "excess_vs_sector": round(float(day[symbol] - day[sector]), 2),
+        "excess_vs_sector": round(float(day[symbol] - day[sector]), 2) if sector else None,
         "excess_vs_market": round(float(day[symbol] - day[market]), 2),
         "beta_1y": round(beta, 2),
         "beta_expected_pct": round(expected, 2),
         "idiosyncratic_pct": round(float(day[symbol]) - expected, 2),
     }
+    return out
 
 
-def similar_moves(closes: pd.Series, event_date: date, n: int = 3) -> list[dict]:
+def similar_moves(closes: pd.Series, event_date, n: int = 3) -> list[dict]:
     """Past days with the closest same-direction move, and what the stock did afterwards."""
+    event_date = _as_date(event_date)
     rets = daily_returns(closes)
+    if event_date not in rets.index:
+        return []
     move = rets.loc[event_date]
     positions = {d: i for i, d in enumerate(closes.index)}
 
@@ -96,4 +118,5 @@ def pct_from_prev_close(bars: pd.DataFrame, event_start_utc: pd.Timestamp) -> pd
         base = prev.iloc[-1]
         out.append(pd.DataFrame({"time": g["time"], "symbol": sym,
                                  "pct": (g["price"] - base) / base * 100}))
-    return pd.concat(out, ignore_index=True)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(
+        columns=["time", "symbol", "pct"])

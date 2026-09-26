@@ -19,7 +19,7 @@ expand scope.
 
 ## Locked MVP scope — build in this order
 1. yfinance intraday (5-min interval) for ticker + sector ETF + SPY → Tiger Data hypertable
-2. yfinance 5yr daily history → compute z-score / percentile of today's move
+2. yfinance 5yr daily history → compute z-score / percentile of the session's move
    ("bigger than 97.8% of NVDA's daily moves over the past 5 years")
 3. NYT Article Search API → headlines for the ticker/company in the date window, with real
    pub timestamps → plot as markers on the price chart
@@ -32,6 +32,24 @@ expand scope.
 7. ElevenLabs voice briefing — text-to-speech of a scripted summary (see "Team's prior
    hackathon context" for why the Bay Hacks code wasn't reusable)
 8. Deploy to DigitalOcean (use their free subdomain, not a custom domain)
+
+## Generic tickers — built after the META demo worked
+Originally hardcoded to META. Now any traded ticker, at the user's request, so the demo is
+not a one-trick pony. Constraints that shaped it:
+- Sector comes from a hand-maintained GICS map in `config.py` (`TICKER_SECTORS` → `SECTOR_ETFS`).
+  Yahoo's sector field needs a slow, rate-limited `.info` call. An unmapped symbol gets **no**
+  sector line rather than a guessed one — a wrong comparison is worse than none.
+- The investigated session is chosen at request time: `latest` (most recent completed session)
+  or `unusual` (largest move in the last 30 trading days). The reference demo is preserved as
+  META + unusual = Sep 21, 2026.
+- The event date comes from the trading days yfinance returns, never the calendar. `market.describe`
+  renders an explicit freshness note, because a stale investigation must not look live.
+- `app.py` caches per `(symbol, mode)` with a 5-min TTL. A single global cache entry would serve
+  one ticker's data to every ticker. `prices.py` uses `ttl_cache` rather than `lru_cache` so an
+  explicit Refresh re-fetches — `lru_cache` cannot expire and would pin a partial intraday bar.
+- `ingest.py` now takes a ticker and mode and resolves the session through the same code path the
+  API uses, so the continuous aggregate lines up with what the API later queries.
+
 
 Stretch only if time allows: MongoDB to store saved investigations as documents (natural fit,
 ~30 min of work). Do not build it earlier than step 8.
@@ -56,12 +74,14 @@ Do not add Solana or Snowflake even if there's spare time — not worth the setu
 - Deploy: DigitalOcean App Platform, free subdomain
 
 ## Data sources
-- yfinance: intraday + historical price data (free, no key)
+- yfinance: intraday + historical price data (free, no key). Also `yf.Search` powers ticker
+  typeahead (fuzzy, so "nvid" → NVDA). US listings are sorted first; futures are filtered out.
 - NYT Article Search API: https://developer.nytimes.com — free key, must enable
   "Article Search API" specifically on the app or you get 401s. Rate limit 500 req/day, 5/min.
-  Query params: q=<company>, begin_date, end_date (YYYYMMDD format).
-- Alpha Vantage News Sentiment API: free, ticker-scored sentiment, secondary signal to
-  cross-check Gemini's read
+  Query params: q=<company>, begin_date, end_date (YYYYMMDD format). Each investigation can
+  burn 2 queries (company name + ticker), so `news.py` caches to `backend/.cache` keyed by
+  symbol *and* event date.
+- Alpha Vantage News Sentiment API: not wired up; `news.py` is the only news path.
 - WSJ: explicitly excluded — no free API, paywalled content, not worth the time
 
 ## Tiger Data schema
@@ -77,13 +97,16 @@ ticks per request — this is the judges' talking point for "why Tiger Data spec
 Continuous aggregates are materialized-only by default: ingest calls
 `refresh_continuous_aggregate` after inserting.
 
-## Demo ticker — LOCKED
-META, Mon 2026-09-21: META +11.43% vs XLC +3.90% vs SPY +1.55%.
+## Reference demo — META, Mon 2026-09-21
+META +11.43% vs XLC +3.90% vs SPY +1.55%.
 Bigger than 99.4% of META's daily moves over 5 years (z = 4.0); beta-adjusted, +9.3 pts is
-META-specific. Sector ETF XLC, market SPY. Config lives in `backend/config.py`.
+META-specific. Sector ETF XLC, market SPY.
+Reachable in the shipped app as META + "Most unusual" (deep link `/#s=META&m=unusual`), since
+Sep 21 is the largest move in the trailing 30-session window. Use this for demos — it is the
+strongest story in the dataset.
 yfinance 5-min data only goes back ~60 days — ingest into Tiger Data before ~Nov 20, 2026
-or the intraday chart can't be rebuilt from yfinance.
-Do not build generic multi-ticker support.
+or the intraday chart can't be rebuilt from yfinance. Past that, `/api/investigation` degrades
+to the daily comparison and sets `chart_source: "unavailable"` with a caveat.
 
 ## Team's prior hackathon context
 Built NeuroTriage-Home at Bay Hacks 2026 (2nd place, Render track), 4-person team, with React,
