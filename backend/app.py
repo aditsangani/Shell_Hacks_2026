@@ -10,9 +10,11 @@ from flask_cors import CORS
 import explain
 import investigation
 import market
+import news
 import prices
+import timeline
 import voice
-from config import CACHE_TTL, PORT
+from config import CACHE_TTL, PORT, scrub
 
 DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -63,6 +65,18 @@ def _explanations(symbol: str, mode: str, refresh: bool) -> dict:
     return result
 
 
+def _timeline(symbol: str, mode: str, refresh: bool) -> dict:
+    """Deliberately NOT response-cached.
+
+    The payload is now built from disk in ~1ms and never touches the network, so caching it
+    bought nothing — while actively breaking the polling loop: a cached "warming: true,
+    pool: 0" response would be replayed for the whole TTL, so the UI would poll for minutes
+    and never see the background warm land.
+    """
+    inv = _investigation(symbol, mode, refresh=False)
+    return timeline.build(symbol, mode, inv, refresh=refresh)
+
+
 def _args() -> tuple[str, str, bool]:
     symbol = (request.args.get("symbol") or "").strip()
     mode = (request.args.get("mode") or "latest").strip()
@@ -74,9 +88,25 @@ def _args() -> tuple[str, str, bool]:
     return symbol, mode, refresh
 
 
+def _prefetch_timeline(symbol: str, mode: str, inv: dict) -> None:
+    """Start warming the article pool in the background the moment an investigation is served.
+
+    By the time the user opens the timeline the chunks are usually already cached, so the
+    page renders instantly. Entirely best-effort: a failure here must not affect the
+    investigation response.
+    """
+    try:
+        if timeline.missing_chunks(_event_date(inv), symbol, mode, inv["company"]) > 0:
+            timeline.start_warm(symbol, mode, inv, log=app.logger.info)
+    except Exception:
+        pass
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "modes": list(investigation.MODES), "today": market.now_et().date().isoformat()}
+    return {"ok": True, "modes": list(investigation.MODES),
+            "today": market.now_et().date().isoformat(),
+            "nyt_budget": {"used": news.budget_state()["used"], "cap": news.NYT_SAFETY_CAP}}
 
 
 @app.get("/api/search")
@@ -95,21 +125,23 @@ def session_info():
         latest = market.latest_session(closes.index)
         return jsonify(market.describe(latest, "latest", latest=latest))
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return jsonify({"error": scrub(e)}), 502
 
 
 @app.get("/api/investigation")
 def get_investigation():
     try:
         symbol, mode, refresh = _args()
-        return jsonify(_investigation(symbol, mode, refresh))
+        inv = _investigation(symbol, mode, refresh)
+        _prefetch_timeline(symbol, mode, inv)
+        return jsonify(inv)
     except LookupError as e:
         return jsonify({"error": f"No price history for {request.args.get('symbol')!r}. "
                                  "Check the ticker and that it is a traded US symbol."}), 404
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": scrub(e)}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return jsonify({"error": scrub(e)}), 502
 
 
 @app.get("/api/explanations")
@@ -118,27 +150,45 @@ def get_explanations():
         symbol, mode, refresh = _args()
         return jsonify(_explanations(symbol, mode, refresh))
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": scrub(e)}), 400
     except Exception as e:  # surface missing keys / model errors to the UI instead of a 500 page
-        return jsonify({"error": str(e)}), 502
+        return jsonify({"error": scrub(e)}), 502
 
 
-@app.get("/api/briefing.mp3")
-def get_briefing():
+@app.get("/api/timeline")
+def get_timeline():
+    """Article timeline for the mode's window: 6 months for latest, 5 years for unusual.
+
+    Returns cached data immediately. Sampling is rate-limited to ~5 req/min, so a cold warm
+    runs on a background thread and the response reports `warming: true` — poll until it
+    clears. Pre-warm with `ingest.py <symbol> <mode> --timeline`.
+    """
     try:
         symbol, mode, refresh = _args()
-        inv = _investigation(symbol, mode, refresh)
+        return jsonify(_timeline(symbol, mode, refresh))
+    except ValueError as e:
+        return jsonify({"error": scrub(e)}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": scrub(e)}), 502
+
+
+@app.post("/api/timeline/warm")
+def warm_timeline():
+    """Start a background warm and return immediately."""
     try:
-        exp = _explanations(symbol, mode, refresh=False)
-    except Exception:
-        exp = None
-    try:
-        audio = voice.synthesize(voice.briefing_script(inv, exp))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
-    return Response(audio, mimetype="audio/mpeg")
+        symbol, mode, _refresh = _args()
+    except ValueError as e:
+        return jsonify({"error": scrub(e)}), 400
+    inv = _investigation(symbol, mode, refresh=False)
+    todo = timeline.missing_chunks(_event_date(inv), symbol, mode, inv["company"])
+    started = timeline.start_warm(symbol, mode, inv, log=app.logger.info)
+    return jsonify({"ok": True, "started": started, "pending_requests": todo,
+                    "job": timeline.job_state(symbol, mode)})
+
+
+def _event_date(inv: dict):
+    from datetime import date
+    return date.fromisoformat(inv["event_date"])
 
 
 @app.get("/", defaults={"path": ""})

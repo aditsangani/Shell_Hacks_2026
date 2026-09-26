@@ -6,6 +6,7 @@ market proxy, the sector map and the API keys are fixed.
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -107,3 +108,20 @@ ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5")
 # PORT is set by the Docker image for gunicorn; 5001 locally because macOS AirPlay
 # Receiver occupies 5000 and answers 403 to every request.
 PORT = int(os.getenv("PORT", 5001))
+
+_SECRETS = (DATABASE_URL, NYT_API_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY)
+
+
+def scrub(msg) -> str:
+    """Redact every configured secret from a message.
+
+    The NYT key travels as a query parameter, so requests' HTTPError text embeds a URL
+    containing it verbatim. Exception text reaches log files and JSON responses, so it gets
+    redacted in one place instead of trusting every call site to remember.
+    """
+    text = str(msg)
+    for secret in _SECRETS:
+        if secret and len(secret) > 8:
+            text = text.replace(secret, "***")
+    # Also catch key-shaped query params from any provider, present or future.
+    return re.sub(r"((?:api[-_]?key|key|token)=)[^&\s\"']+", r"\1***", text, flags=re.I)

@@ -3,9 +3,8 @@ import { pct } from './format.js'
 import Search from './components/Search.jsx'
 import Unusualness from './components/Unusualness.jsx'
 import Divergence from './components/Divergence.jsx'
-import News from './components/News.jsx'
-import Explanations from './components/Explanations.jsx'
 import SimilarMoves from './components/SimilarMoves.jsx'
+import Timeline from './components/Timeline.jsx'
 
 const MODES = [
   { id: 'latest', label: 'Latest session', hint: 'The most recent completed trading day.' },
@@ -20,11 +19,18 @@ function readRoute() {
   const p = new URLSearchParams(raw)
   const symbol = (p.get('s') || '').toUpperCase()
   if (!symbol) return null
-  return { symbol, mode: MODES.some((m) => m.id === p.get('m')) ? p.get('m') : 'latest' }
+  const m = p.get('m')
+  return {
+    symbol,
+    mode: MODES.some((x) => x.id === m) ? m : 'latest',
+    view: p.get('view') === 'timeline' ? 'timeline' : 'investigation',
+  }
 }
 
 function writeRoute(route) {
-  const next = route ? `#s=${route.symbol}&m=${route.mode}` : '#'
+  const next = route
+    ? `#s=${route.symbol}&m=${route.mode}` + (route.view === 'timeline' ? '&view=timeline' : '')
+    : '#'
   if (window.location.hash !== next) {
     window.history.pushState(null, '', window.location.pathname + window.location.search + next)
   }
@@ -37,36 +43,25 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [exp, setExp] = useState(null)
-  const [expLoading, setExpLoading] = useState(false)
   const [voice, setVoice] = useState('idle')
+  const [tl, setTl] = useState(null)
+  const [tlLoading, setTlLoading] = useState(false)
+  const [tlError, setTlError] = useState(null)
+  const [warming, setWarming] = useState(false)
   const audioRef = useRef(null)
 
-  const query = (extra = '') => {
-    const p = new URLSearchParams({ symbol: route.symbol, mode: route.mode })
-    return `/api/investigation?${p}${extra}`
-  }
+  const params = useCallback(
+    () => new URLSearchParams({ symbol: route.symbol, mode: route.mode }),
+    [route?.symbol, route?.mode]
+  )
 
-  const loadExplanations = useCallback(async (refresh) => {
-    setExpLoading(true)
-    setExp(null)
-    try {
-      const r = await fetch(query(refresh ? '&refresh=1' : ''))
-      setExp(r.ok ? await r.json() : { error: (await r.json().catch(() => ({}))).error ?? `API ${r.status}` })
-    } catch (e) {
-      setExp({ error: e.message })
-    } finally {
-      setExpLoading(false)
-    }
-  }, [route?.symbol, route?.mode])
-
-  const load = useCallback(async (refresh) => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     setInv(null)
-    setExp(null)
     setVoice('idle')
     try {
-      const r = await fetch(query(refresh ? '&refresh=1' : ''))
+      const r = await fetch(`/api/investigation?${params()}`)
       const body = await r.json()
       if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
       setInv(body)
@@ -75,13 +70,36 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [route?.symbol, route?.mode])
+  }, [params])
+
+  const loadTimeline = useCallback(async () => {
+    setTlLoading(true)
+    setTlError(null)
+    try {
+      const r = await fetch(`/api/timeline?${params()}`)
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
+      setTl(body)
+    } catch (e) {
+      setTlError(e.message)
+    } finally {
+      setTlLoading(false)
+    }
+  }, [params])
+
+  // A cold warm runs on the server (~5 req/min, so up to a minute). Poll instead of
+  // blocking, and stop as soon as the server says the job has settled.
+  useEffect(() => {
+    if (!tl?.warming) return
+    const id = setInterval(loadTimeline, 2500)
+    return () => clearInterval(id)
+  }, [tl?.warming, loadTimeline])
 
   useEffect(() => {
     if (!route) return
-    load(false)
-    loadExplanations(false)
-  }, [route, load, loadExplanations])
+    load()
+    if (route.view === 'timeline') loadTimeline()
+  }, [route, load, loadTimeline])
 
   useEffect(() => {
     const onPop = () => setRoute(readRoute())
@@ -90,8 +108,7 @@ export default function App() {
   }, [])
 
   function start(symbol) {
-    const next = { symbol, mode }
-    setMode((m) => m) // keep the chosen mode across searches
+    const next = { symbol, mode, view: 'investigation' }
     writeRoute(next)
     setRoute(next)
   }
@@ -105,17 +122,35 @@ export default function App() {
     }
   }
 
+  function go(view) {
+    const r = { ...route, view }
+    writeRoute(r)
+    setRoute(r)
+  }
+
   function goHome() {
     writeRoute(null)
     setRoute(null)
     setInv(null)
+    setTl(null)
     setExp(null)
     setError(null)
   }
 
-  function refresh() {
-    load(true)
-    loadExplanations(true)
+  async function warmTimeline() {
+    setWarming(true)
+    setTlError(null)
+    try {
+      const r = await fetch(`/api/timeline/warm?${params()}`, { method: 'POST' })
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
+      setTl(null)
+      await loadTimeline()
+    } catch (e) {
+      setTlError(e.message)
+    } finally {
+      setWarming(false)
+    }
   }
 
   async function playBriefing() {
@@ -126,7 +161,7 @@ export default function App() {
     }
     setVoice('loading')
     try {
-      const r = await fetch(query())
+      const r = await fetch(`/api/briefing.mp3?${params()}`)
       if (!r.ok) throw new Error((await r.json()).error)
       const audio = new Audio(URL.createObjectURL(await r.blob()))
       audio.onended = () => setVoice('idle')
@@ -188,6 +223,20 @@ export default function App() {
     )
   }
 
+  /* ---------------- Timeline page ---------------- */
+  if (route.view === 'timeline') {
+    return (
+      <Timeline
+        tl={tl}
+        loading={tlLoading}
+        error={tlError}
+        warming={warming}
+        onWarm={warmTimeline}
+        onBack={() => go('investigation')}
+      />
+    )
+  }
+
   /* ---------------- Investigation ---------------- */
   const m = inv?.move
   return (
@@ -212,12 +261,17 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button className="ghost" onClick={refresh} disabled={loading}>
+        <button className="ghost" onClick={load} disabled={loading}>
           {loading ? 'Refreshing…' : '↻ Refresh'}
         </button>
       </div>
 
-      {error && <div className="card"><p className="error">{error}</p><button onClick={goHome}>← Change ticker</button></div>}
+      {error && (
+        <div className="card">
+          <p className="error">{error}</p>
+          <button onClick={goHome}>← Change ticker</button>
+        </div>
+      )}
       {!error && loading && <div className="card"><p className="loading">Loading {route.symbol} market data…</p></div>}
 
       {inv && m && (
@@ -245,8 +299,19 @@ export default function App() {
 
           <Unusualness inv={inv} />
           <Divergence inv={inv} />
-          <News inv={inv} />
-          <Explanations exp={exp} loading={expLoading} />
+
+          <section className="card tl-teaser">
+            <div className="step">3 · What was published</div>
+            <h2>Evidence timeline</h2>
+            <p className="sub">
+              New York Times coverage sampled across the{' '}
+              <b>{route.mode === 'unusual' ? '5 years' : '6 months'}</b> before this session,
+              triaged by Gemini into the articles that bear on the move — and whether the move
+              was stock-specific or market-wide.
+            </p>
+            <button className="primary" onClick={() => go('timeline')}>Open the timeline →</button>
+          </section>
+
           <SimilarMoves inv={inv} />
 
           <p className="disclaimer">

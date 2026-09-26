@@ -8,25 +8,89 @@ Search any traded ticker, pick which session to investigate, and get a deep-dive
 
 1. **How unusual:** percentile and z-score vs 5 years of daily moves
 2. **Company or market:** ticker vs its sector ETF vs SPY, intraday, with a beta-adjusted idiosyncratic move
-3. **What was published:** NYT headlines with real timestamps, pinned on the chart
-4. **Candidate explanations:** Gemini, each one citing headline IDs or data points
-5. **Has this happened before:** the closest past moves and their +1/+5/+20-day returns
-6. **Voice briefing:** ElevenLabs TTS
+3. **Evidence timeline** — its own page: NYT coverage sampled across a long window, triaged by Gemini into the articles that bear on the move, plotted by date and coloured stock / sector / market
+4. **Has this happened before:** the closest past moves and their +1/+5/+20-day returns
+5. **Voice briefing:** ElevenLabs TTS
 
 ## Which session gets investigated
-
-The intro page offers two modes:
 
 - **Latest session** — the most recent *completed* trading day.
 - **Most unusual** — the largest absolute move in the last 30 trading days.
 
 The most recent trading day is derived from the price data itself, never from the calendar,
-so weekends and market holidays are handled by the same rule. When the investigated session
-is not today, the UI says so explicitly and why — a stale investigation never presents itself
-as a live one. During an open session the figures are labelled live and update on refresh.
+so weekends *and* market holidays are handled by one rule. When the investigated session is
+not today, the UI says so and why — a stale investigation never presents itself as a live
+one. During an open session the figures are labelled live and update on refresh.
 
-For the reference demo, `META` in **Most unusual** mode lands on **Mon, Sep 21, 2026:
-+11.43%, 99.4th percentile, z = 4.0**.
+Reference demo: `META` in **Most unusual** lands on **Mon, Sep 21, 2026 — +11.43%,
+99.4th percentile, z = 4.0**.
+
+## The evidence timeline
+
+Route: `/#s=NVDA&m=unusual&view=timeline`, linked from every investigation.
+
+The look-back window depends on the mode: **6 months** for a latest-session move (a recent
+move needs recent context) and **5 years** for an unusual one (that session may be 30+
+trading days old and needs the long view).
+
+A window that long cannot be fetched in one call. Article Search returns at most 100 results
+per query and sorts only by `newest` or `oldest`, so a single 5-year request comes back
+holding only the last fortnight. The window is split into **calendar-year cells** and one page
+is sampled from each, which is what makes the timeline span its range instead of clustering
+at one end.
+
+**You should never wait for this.** `/api/timeline` only ever reads from disk; sampling runs
+on a background thread and the page polls until it settles. Opening an investigation kicks off
+the warm immediately, so by the time you click through to the timeline the articles are
+usually already there. Results are published per cell, so the timeline fills in progressively
+rather than sitting blank. A cold 5-year warm takes ~75s in the background and **0.003s per
+poll** while it happens.
+
+You can also pre-warm from the CLI, which is worth doing before a demo:
+
+```bash
+cd backend
+python ingest.py NVDA unusual --timeline
+```
+
+### What it costs, and why it is not more
+
+NYT allows 500 requests/day and 5/minute. At 5/minute the requests *are* the cost, so the
+sampler is built around not making them:
+
+| | before | now |
+|---|---|---|
+| Cold 5-year warm | 10 requests | **6** |
+| Repeat visit, same ticker | 10 again | **0** |
+| Switch modes (5yr warm already cached) | 10 | **≤1** |
+| Page load while warming | blocked 60–135s | **~3ms** |
+
+- **Calendar-aligned cell cache.** Every (term, year-cell, page) is cached on disk
+  individually. A second visit costs nothing, an interrupted warm resumes, and because the
+  6-month window lives inside a cell the 5-year window already cached, the two modes share
+  work.
+- **A hard daily budget.** Spend is persisted to `backend/.cache/nyt_budget.json` and stops at
+  400/day, clear of the real 500 cap. A long test session degrades to cached data instead of
+  erroring, and never sleeps when everything is already cached.
+- **Partial results over exceptions.** A rate-limited chunk keeps whatever was collected.
+
+### The stock-specific vs market-wide verdict
+
+The headline verdict is *not* left to the model. It comes from the beta-adjusted
+decomposition (`timeline.scope_verdict`): the share of the move the market's beta does not
+explain. Gemini triages the articles — keeping only those that plausibly bear on the move,
+labelling each `stock` / `sector` / `market`, rating significance, writing a thesis — and is
+asked to argue that number rather than invent one. If it disagrees, the disagreement is
+surfaced instead of silently swapping the verdict.
+
+### API quotas are the binding constraint
+
+- **NYT** — 500 requests/day, 5/min. Sampler stops itself at 400/day.
+- **Gemini free tier** — **20 requests/day.** One timeline triage is one request.
+
+When Gemini's quota is spent the timeline still shows the articles, marked untriaged, with
+the verdict still computed from prices. Failed triage is not retried for 10 minutes, so an
+exhausted quota does not turn every page load into another doomed call.
 
 ## Run locally
 
@@ -38,7 +102,8 @@ python backend/app.py               # API on :5001
 cd frontend && npm install && npm run dev   # UI on :5173, proxies /api
 ```
 
-Optional: pre-load a ticker into Tiger Data (needs `DATABASE_URL`; add `NYT_API_KEY` for headlines).
+Optional: pre-load a ticker into Tiger Data (needs `DATABASE_URL`; add `NYT_API_KEY` for
+headlines in the tight window).
 
 ```bash
 cd backend
@@ -49,8 +114,8 @@ python ingest.py NVDA --no-news     # skip the NYT call to save quota
 
 The API port is 5001 because macOS AirPlay Receiver occupies 5000 and answers
 `403 Forbidden` to every request, which surfaces in the UI as
-"Couldn't load investigation: API 403". To use a different port, set `PORT` and change
-the target in `frontend/vite.config.js` to match.
+"Couldn't load investigation: API 403". To use a different port, set `PORT` and change the
+target in `frontend/vite.config.js` to match.
 
 Every key is optional for a first run. Without `DATABASE_URL` the chart is computed from
 yfinance in memory. Without `NYT_API_KEY` no headlines load. Missing Gemini or ElevenLabs
@@ -61,11 +126,10 @@ Yahoo's rate limits. **↻ Refresh** forces a virgin fetch.
 
 ### Deep links
 
-The investigated ticker lives in the URL hash, which is handy for demos:
-
 ```
 /#s=NVDA&m=unusual
 /#s=META&m=latest
+/#s=NVDA&m=unusual&view=timeline
 ```
 
 ## Deploy (DigitalOcean App Platform)

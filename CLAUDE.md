@@ -50,6 +50,61 @@ not a one-trick pony. Constraints that shaped it:
 - `ingest.py` now takes a ticker and mode and resolves the session through the same code path the
   API uses, so the continuous aggregate lines up with what the API later queries.
 
+## Evidence timeline — replaced the old steps 3 and 4
+`News.jsx` and `Explanations.jsx` are deleted. `backend/timeline.py` + `Timeline.jsx` replace
+them, on their own page (`&view=timeline`). Things that were not obvious:
+- **The window is mode-dependent**: 6 months for `latest`, 5 years for `unusual`
+  (`market.ARTICLE_WINDOWS`). A recent move needs recent context; an unusual one is 30+
+  sessions old.
+- **The window cannot be fetched in one call.** NYT Article Search caps at 100 results and
+  sorts only `newest`/`oldest`, so one 5-year query returns only the last fortnight.
+- **Cells are calendar-year aligned and keyed by that year**, not by the clipped query range
+  (`market.plan_cells`). That is what makes the cache shareable between modes. Sizing chunks
+  relative to the window start instead gave each mode different boundaries and zero reuse.
+- **Nothing blocks on the network.** `timeline.build()` reads disk only; `start_warm()` runs
+  the sampler on a daemon thread and the UI polls. A cold 5-year warm is ~75s of background
+  work and ~3ms per poll. Opening an investigation prefetches.
+- **`/api/timeline` is deliberately NOT response-cached** even though other routes are. The
+  payload is a ~1ms disk read, and caching it replayed a stale `warming: true, pool: 0` for
+  the whole TTL — the UI polled for minutes and never saw the warm land. This was a real bug.
+- **`missing_chunks` must mirror the sampler's stop conditions**, including breaking on a
+  cached *empty* page. Without that it reported pending work forever and re-triggered warms
+  that had nothing to do.
+- **A failed triage is not retried for 10 minutes** (`TRIAGE_RETRY_COOLDOWN`). With the free
+  tier spent, every poll otherwise started another doomed Gemini call.
+- **Search on the short name, not the legal name.** `news.short_company` strips
+  "Corporation"/"Inc."/"Co." etc. The NYT writes "Nvidia", not "NVIDIA Corporation"; the long
+  form has terrible recall.
+- **The verdict is arithmetic, not vibes.** `timeline.scope_verdict` derives
+  stock-specific / market-wide / mixed from the share of the move beta does not explain, and
+  clamps it to 1.0 (it exceeds 1 when the market moved against the stock).
+
+## NYT request budget — the real bottleneck
+5 requests/minute means requests, not CPU. Cost went 10 → 6 for a cold 5-year warm, and
+10 → 0 for a repeat visit. The mechanisms, in order of value:
+1. Per-cell disk cache (`news._reusable_term_cache`) — repeat visits and cross-mode reuse.
+2. `market.plan_cells` sizing the cell count to the per-warm budget.
+3. A persisted daily budget (`news.budget_state`) that hard-stops at 400/day, clear of the
+   real 500 cap, so a long test session degrades to cached data instead of erroring.
+4. Sleeping only when actually requesting; a fully cached warm does not sleep at all.
+5. `on_progress` publishing partial pools, so the page fills in during the warm.
+
+When benchmarking the sampler, stub `news._fetch_nyt` and give each case its own
+`CHUNK_DIR` — sharing a cache dir across cases makes the numbers lie.
+
+## Secrets must never reach a log or a response
+`config.scrub()` redacts every configured key. It exists because the NYT key is a **query
+parameter**, so `requests`' `HTTPError` text embeds a full URL containing the key verbatim —
+printing that exception leaks the key. Every `str(e)` in `app.py` goes through `scrub`. Do
+not add a bare `str(e)` on an error path that can carry a request URL.
+
+## Testing gotchas hit in this repo
+- Stubbing `time.sleep` globally also breaks the test's own wait loops. Keep a handle on the
+  real function first.
+- `shutil.rmtree`/`rm` with a glob that matches nothing aborts the whole command in zsh.
+  Use `find … -delete` for cache cleanup.
+- Patching `news.CACHE_DIR` is not enough for sampler tests: `CHUNK_DIR` and `BUDGET_PATH`
+  are separate globals and the sampler writes to all three.
 
 Stretch only if time allows: MongoDB to store saved investigations as documents (natural fit,
 ~30 min of work). Do not build it earlier than step 8.

@@ -125,25 +125,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .tooltip .row { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .tooltip .row b { margin-left: auto; padding-left: 12px; }
 
-/* News */
-.news { list-style: none; padding: 0; margin: 0; }
-.news li { display: grid; grid-template-columns: 36px 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
-.news li:first-child { border-top: none; }
-.hid { font-weight: 700; font-size: 12px; color: var(--text-secondary); background: var(--wash); border-radius: 6px; text-align: center; padding: 2px 0; height: fit-content; }
-.news .meta { font-size: 12px; color: var(--text-muted); }
-.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--wash); color: var(--text-secondary); margin-left: 6px; }
-.news .snippet { font-size: 13px; color: var(--text-secondary); }
-
-/* Explanations */
-.exp { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-.exp h3 { margin: 0 0 6px; font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.exp p { margin: 0 0 12px; color: var(--text-secondary); font-size: 14px; }
-.evidence { border-left: 2px solid var(--axis); padding: 4px 0 4px 12px; margin-top: 8px; font-size: 13px; }
-.evidence .why { color: var(--text-muted); }
-.caveat { color: var(--text-muted); font-size: 13px; }
-.error { color: var(--down); font-size: 14px; }
-.loading { color: var(--text-muted); font-size: 14px; }
-
 /* Similar moves table */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -219,6 +200,63 @@ tr.event td { font-weight: 650; background: var(--wash); }
 }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--wash); color: var(--text-secondary); margin-left: 6px; }
+.caveat { color: var(--text-muted); font-size: 13px; }
+.error { color: var(--down); font-size: 14px; }
+.loading { color: var(--text-muted); font-size: 14px; }
+
+/* Evidence timeline */
+.tl-teaser .primary { margin-top: 4px; }
+.tl-title { font-weight: 600; font-size: 14px; }
+.tl-narrative { margin: 14px 0 0; font-size: 15px; color: var(--text-primary); }
+
+.tl-verdict { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 4px 0 8px; }
+.tl-verdict.stock { border-left: 3px solid var(--series-1); }
+.tl-verdict.market { border-left: 3px solid var(--series-3); }
+.tl-verdict.mixed { border-left: 3px solid var(--series-2); }
+.tl-verdict.flat { border-left: 3px solid var(--muted-bar); }
+.tl-verdict-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.tl-verdict-label { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.tl-verdict-share { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.meter { height: 8px; border-radius: 999px; background: var(--series-3); margin-top: 10px; overflow: hidden; }
+.meter-idio { height: 100%; background: var(--series-1); border-radius: 999px; }
+
+.tl-plot-wrap { margin-top: 20px; }
+.tl-plot { width: 100%; height: auto; display: block; overflow: visible; }
+.tl-axis { stroke: var(--axis); stroke-width: 1; }
+.tl-grid { stroke: var(--grid); stroke-width: 1; }
+.tl-lane-rule { stroke: var(--grid); stroke-width: 1; stroke-dasharray: 2 4; }
+.tl-lane-label { fill: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.tl-tick { fill: var(--text-muted); font-size: 11px; text-anchor: middle; }
+.tl-event-line { stroke: var(--text-primary); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.tl-event-mark { fill: var(--text-primary); }
+.tl-event-label { fill: var(--text-primary); font-size: 12px; font-weight: 700; }
+.tl-dot { cursor: pointer; }
+.tl-dot circle:last-child { stroke: var(--surface); stroke-width: 1.5; transition: r 0.12s ease; }
+.tl-dot:hover circle:last-child, .tl-dot.on circle:last-child { stroke: var(--text-primary); stroke-width: 2.5; }
+.tl-legend { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
+.tl-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tl-legend-sep { width: 1px; height: 14px; background: var(--axis); }
+
+.tl-detail { position: relative; margin-top: 16px; border-left: 3px solid var(--axis); padding: 12px 16px; background: var(--wash); border-radius: 0 8px 8px 0; }
+.tl-detail-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.tl-detail-date { color: var(--text-muted); font-size: 12px; }
+.tl-detail-headline { font-weight: 600; font-size: 15px; }
+.tl-close { position: absolute; top: 8px; right: 8px; padding: 0 8px; font-size: 18px; line-height: 1.2; background: none; border: none; color: var(--text-muted); }
+
+.tl-cold { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.tl-quota {
+  border: 1px solid var(--border); border-left: 3px solid var(--series-2);
+  background: var(--wash); border-radius: 0 8px 8px 0;
+  padding: 12px 16px; font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;
+}
+.tl-list { list-style: none; padding: 0; margin: 0; }
+.tl-list li { border-left: 3px solid var(--axis); padding: 10px 0 10px 14px; border-bottom: 1px solid var(--grid); }
+.tl-list li:last-child { border-bottom: none; }
+.tl-list-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.tl-list-date { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tl-list-why { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+
 @media (max-width: 600px) {
   .hero .move { font-size: 44px; }
   .big { font-size: 36px; }
@@ -227,4 +265,18 @@ tr.event td { font-weight: 650; background: var(--wash); }
   .intro-title { font-size: 26px; }
   .result { grid-template-columns: 68px 1fr; }
   .rexch { display: none; }
+  .tl-plot { min-width: 560px; }
+  .tl-plot-wrap { overflow-x: auto; }
+}
+
+/* Background warm progress */
+.tl-progress {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); font-size: 13px; color: var(--text-secondary);
+}
+.tl-spin {
+  width: 14px; height: 14px; flex: none; border-radius: 50%;
+  border: 2px solid var(--axis); border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
 }

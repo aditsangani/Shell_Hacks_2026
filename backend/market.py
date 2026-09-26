@@ -116,8 +116,60 @@ def window_bounds(trading_days, event: date) -> tuple[date, date]:
 
 
 def search_window(event: date) -> tuple[date, date]:
-    """News window: a few days before the event through the day after.
-
-    Catches a weekend-ahead-of-a-Monday-event release without pulling in stale news.
-    """
+    """Tight news window: a few days before the event through the day after."""
     return event - timedelta(days=3), event + timedelta(days=1)
+
+
+# How far back the timeline looks, by investigation mode. A "latest session" move needs
+# recent context; an "unusual" move is 30+ sessions old and needs the long view.
+ARTICLE_WINDOWS = {
+    "latest": timedelta(days=183),   # ~6 months
+    "unusual": timedelta(days=365 * 5),  # 5 years
+}
+ARTICLE_TAIL = timedelta(days=2)  # include the immediate aftermath
+MAX_ARTICLE_CHUNK = timedelta(days=365)  # no single query usefully spans more
+
+
+def article_window(event: date, mode: str) -> tuple[date, date]:
+    """(begin, end) for the timeline, relative to the investigated session."""
+    span = ARTICLE_WINDOWS.get(mode) or ARTICLE_WINDOWS["latest"]
+    return event - span, event + ARTICLE_TAIL
+
+
+def chunk_dates(begin: date, end: date, chunk: timedelta = None,
+                min_chunk_days: int = 45) -> list[tuple[date, date]]:
+    """Split a window into sub-ranges. Legacy fixed-chunk helper; `plan_chunks` is the
+    budget-aware version the sampler actually uses.
+    """
+    chunk = chunk or timedelta(days=183)
+    out: list[tuple[date, date]] = []
+    cur = begin
+    while cur <= end:
+        nxt = min(cur + chunk, end + timedelta(days=1))
+        out.append((cur, nxt - timedelta(days=1)))
+        cur = nxt
+    # The window has a small tail past the event, which would otherwise become its own tiny
+    # chunk and burn a whole slice of the request budget for two days of coverage.
+    if len(out) > 1 and (out[-1][1] - out[-1][0]).days < min_chunk_days:
+        out = out[:-2] + [(out[-2][0], out[-1][1])]
+    return out
+
+
+def plan_cells(begin: date, end: date, budget: int) -> list[tuple[str, date, date]]:
+    """Canonical calendar-year cells covering [begin, end], as (cell_id, query_begin, query_end).
+
+    Cells are aligned to calendar years and keyed by that year, *not* by the clipped query
+    range. That is what makes the cache shareable: a 5-year warm caches cells 2022-2026, so
+    the 6-month window — which queries only cell 2026 — is then already cached and costs
+    zero requests. Sizing chunks relative to the window start instead (the earlier approach)
+    gave every mode different boundaries and no sharing at all.
+
+    When the window needs more cells than the budget allows, the ones nearest the event are
+    kept: the catalyst for a move is far more likely to be close to it than five years back.
+    """
+    years = list(range(begin.year, end.year + 1))
+    if len(years) > max(1, budget):
+        anchor = end.year
+        years = sorted(years, key=lambda y: (abs(y - anchor), -y))[:max(1, budget)]
+        years.sort()
+    return [(str(y), max(begin, date(y, 1, 1)), min(end, date(y, 12, 31))) for y in years]
