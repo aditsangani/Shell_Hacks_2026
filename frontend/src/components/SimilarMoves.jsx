@@ -4,13 +4,8 @@ const Cell = ({ v }) => <td className={v == null ? '' : v >= 0 ? 'up' : 'down'}>
 
 export default function SimilarMoves({ inv }) {
   return (
-<<<<<<< HEAD
-    <section className="card">
-      <div className="step">4 · Has this happened before?</div>
-=======
     <section className="card insight-card similar-card">
-      <div className="step">5 · Has this happened before?</div>
->>>>>>> f1becbd68253414e96da24c36f469155d00777e6
+      <div className="step">4 · Has this happened before?</div>
       <h2>Closest past moves and what followed</h2>
       <p className="sub">
         The {inv.similar.length} days in the last 5 years closest in size to {pct(inv.move.move_pct)}.

@@ -42,7 +42,6 @@ export default function App() {
   const [inv, setInv] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [exp, setExp] = useState(null)
   const [voice, setVoice] = useState('idle')
   const [tl, setTl] = useState(null)
   const [tlLoading, setTlLoading] = useState(false)
@@ -133,7 +132,6 @@ export default function App() {
     setRoute(null)
     setInv(null)
     setTl(null)
-    setExp(null)
     setError(null)
   }
 
@@ -321,32 +319,24 @@ export default function App() {
             </div>
           </section>
 
-<<<<<<< HEAD
-          <Unusualness inv={inv} />
-          <Divergence inv={inv} />
-
-          <section className="card tl-teaser">
-            <div className="step">3 · What was published</div>
-            <h2>Evidence timeline</h2>
-            <p className="sub">
-              New York Times coverage sampled across the{' '}
-              <b>{route.mode === 'unusual' ? '5 years' : '6 months'}</b> before this session,
-              triaged by Gemini into the articles that bear on the move — and whether the move
-              was stock-specific or market-wide.
-            </p>
-            <button className="primary" onClick={() => go('timeline')}>Open the timeline →</button>
-          </section>
-
-          <SimilarMoves inv={inv} />
-=======
           <div className="investigation-flow">
             <Unusualness inv={inv} />
             <Divergence inv={inv} />
-            <News inv={inv} />
-            <Explanations exp={exp} loading={expLoading} />
+
+            <section className="card insight-card tl-teaser">
+              <div className="step">3 · What was published</div>
+              <h2>Evidence timeline</h2>
+              <p className="sub">
+                New York Times coverage sampled across the{' '}
+                <b>{route.mode === 'unusual' ? '5 years' : '6 months'}</b> before this session,
+                triaged by Gemini into the articles that bear on the move — and whether the move
+                was stock-specific or market-wide.
+              </p>
+              <button className="primary" onClick={() => go('timeline')}>Open the timeline →</button>
+            </section>
+
             <SimilarMoves inv={inv} />
           </div>
->>>>>>> f1becbd68253414e96da24c36f469155d00777e6
 
           <p className="disclaimer">
             Historical observation only — not investment advice. Prices: Yahoo Finance. News: The New York Times.
