@@ -50,6 +50,7 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [voice, setVoice] = useState('idle')
+  const [playbackRate, setPlaybackRate] = useState(1)
   const [tl, setTl] = useState(null)
   const [tlLoading, setTlLoading] = useState(false)
   const [tlError, setTlError] = useState(null)
@@ -198,6 +199,7 @@ export default function App() {
       const r = await fetch(`/api/briefing.mp3?${params()}`)
       if (!r.ok) throw new Error((await r.json()).error)
       const audio = new Audio(URL.createObjectURL(await r.blob()))
+      audio.playbackRate = playbackRate
       audio.onended = () => setVoice('idle')
       audioRef.current = audio
       await audio.play()
@@ -205,6 +207,11 @@ export default function App() {
     } catch (e) {
       setVoice(`error: ${e.message}`)
     }
+  }
+
+  function changePlaybackRate(rate) {
+    setPlaybackRate(rate)
+    if (audioRef.current) audioRef.current.playbackRate = rate
   }
 
   /* ---------------- Intro ---------------- */
@@ -365,8 +372,21 @@ export default function App() {
                       ? 'Pause briefing'
                       : voice === 'paused'
                         ? 'Resume briefing'
-                        : 'Voice briefing'}
+                      : 'Voice briefing'}
                 </button>
+                <div className="speed-controls" role="group" aria-label="Briefing playback speed">
+                  {[1, 1.5, 2].map((rate) => (
+                    <button
+                      key={rate}
+                      type="button"
+                      className={playbackRate === rate ? 'speed-button on' : 'speed-button'}
+                      onClick={() => changePlaybackRate(rate)}
+                      aria-pressed={playbackRate === rate}
+                    >
+                      {rate}×
+                    </button>
+                  ))}
+                </div>
               </div>
               {voice.startsWith('error') && <p className="error">{voice}</p>}
               <p className="pitch"><span aria-hidden="true">◇</span> Evidence-led. No investment recommendations.</p>

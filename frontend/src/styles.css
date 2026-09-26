@@ -548,6 +548,16 @@ h2 { position: relative; z-index: 1; margin: 8px 0 18px; font-size: clamp(20px, 
 }
 .briefing-button:hover:not(:disabled) { background: var(--accent-strong); color: #06130f; transform: translateY(-1px); }
 .play-icon { display: grid; place-items: center; width: 23px; height: 23px; padding-left: 2px; border-radius: 50%; background: rgba(4,28,20,.12); font-size: 8px; }
+.speed-controls {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft);
+}
+.speed-button {
+  min-width: 39px; padding: 7px 8px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-muted); font-size: 10px; font-weight: 700;
+}
+.speed-button:hover { color: var(--text-primary); background: var(--wash); }
+.speed-button.on { background: var(--surface-strong); color: var(--accent); box-shadow: 0 0 0 1px var(--border-strong) inset; }
 .pitch { display: flex; align-items: center; gap: 7px; margin: 14px 0 0; color: #6d8589; font-size: 10px; }
 .pitch span { color: var(--accent); }
 
