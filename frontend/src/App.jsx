@@ -7,6 +7,7 @@ import SimilarMoves from './components/SimilarMoves.jsx'
 import Timeline from './components/Timeline.jsx'
 import ThemeToggle from './components/ThemeToggle.jsx'
 import Conclusion from './components/Conclusion.jsx'
+import SectionNav, { SECTIONS } from './components/SectionNav.jsx'
 
 const MODES = [
   { id: 'latest', label: 'Latest session', hint: 'The most recent completed trading day.' },
@@ -55,6 +56,7 @@ export default function App() {
   const [tlLoading, setTlLoading] = useState(false)
   const [tlError, setTlError] = useState(null)
   const [warming, setWarming] = useState(false)
+  const [activeSection, setActiveSection] = useState('unusualness')
   const audioRef = useRef(null)
 
   useEffect(() => {
@@ -120,6 +122,33 @@ export default function App() {
     load()
     loadTimeline()
   }, [route, load, loadTimeline])
+
+  useEffect(() => {
+    if (!inv || route?.view !== 'investigation') return
+    const elements = SECTIONS.map((section) => document.getElementById(section.id)).filter(Boolean)
+    const updateActiveSection = () => {
+      const atPageEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 8
+      if (atPageEnd) {
+        setActiveSection(elements[elements.length - 1]?.id || 'unusualness')
+        return
+      }
+      const readingLine = window.scrollY + 170
+      const current = elements.reduce(
+        (active, element) => (
+          element.getBoundingClientRect().top + window.scrollY <= readingLine ? element : active
+        ),
+        elements[0],
+      )
+      if (current) setActiveSection(current.id)
+    }
+    updateActiveSection()
+    window.addEventListener('scroll', updateActiveSection, { passive: true })
+    window.addEventListener('resize', updateActiveSection)
+    return () => {
+      window.removeEventListener('scroll', updateActiveSection)
+      window.removeEventListener('resize', updateActiveSection)
+    }
+  }, [inv, route?.view])
 
   useEffect(() => {
     const onPop = () => setRoute(readRoute())
@@ -212,6 +241,11 @@ export default function App() {
   function changePlaybackRate(rate) {
     setPlaybackRate(rate)
     if (audioRef.current) audioRef.current.playbackRate = rate
+  }
+
+  function scrollToSection(id) {
+    setActiveSection(id)
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   /* ---------------- Intro ---------------- */
@@ -343,6 +377,8 @@ export default function App() {
 
       {inv && m && (
         <>
+          <SectionNav active={activeSection} onSelect={scrollToSection} />
+
           <section className="card hero investigation-hero">
             <div className="hero-market">
               <div className="hero-kicker">Selected market event</div>
@@ -397,7 +433,7 @@ export default function App() {
             <Unusualness inv={inv} />
             <Divergence inv={inv} />
 
-            <section className="card insight-card tl-teaser">
+            <section id="evidence" className="card insight-card tl-teaser">
               <div className="step">3 · What was published</div>
               <h2>Evidence timeline</h2>
               <p className="sub">

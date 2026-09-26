@@ -59,7 +59,7 @@ export default function Divergence({ inv }) {
     ) : null
 
   return (
-    <section className="card insight-card divergence-card">
+    <section id="market-context" className="card insight-card divergence-card">
       <div className="step">2 · Company-specific or market-wide?</div>
       <h2>
         {inv.sector_known

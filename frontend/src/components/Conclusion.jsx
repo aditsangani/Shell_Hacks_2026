@@ -18,7 +18,7 @@ export default function Conclusion({ conclusion, timelineError }) {
   }
 
   return (
-    <section className="card insight-card conclusion-card">
+    <section id="conclusion" className="card insight-card conclusion-card">
       <div className="step">5 · Investigation conclusion</div>
       <div className="conclusion-heading">
         <h2>{displayed.title}</h2>

@@ -4,7 +4,7 @@ const Cell = ({ v }) => <td className={v == null ? '' : v >= 0 ? 'up' : 'down'}>
 
 export default function SimilarMoves({ inv }) {
   return (
-    <section className="card insight-card similar-card">
+    <section id="history" className="card insight-card similar-card">
       <div className="step">4 · Has this happened before?</div>
       <h2>Closest past moves and what followed</h2>
       <p className="sub">
