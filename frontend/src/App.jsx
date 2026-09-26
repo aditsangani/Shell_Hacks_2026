@@ -153,12 +153,24 @@ export default function App() {
     }
   }
 
-  async function playBriefing() {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0
-      audioRef.current.play()
+  async function toggleBriefing() {
+    if (voice === 'playing' && audioRef.current) {
+      audioRef.current.pause()
+      setVoice('paused')
       return
     }
+
+    if (audioRef.current) {
+      if (audioRef.current.ended) audioRef.current.currentTime = 0
+      try {
+        await audioRef.current.play()
+        setVoice('playing')
+      } catch (e) {
+        setVoice(`error: ${e.message}`)
+      }
+      return
+    }
+
     setVoice('loading')
     try {
       const r = await fetch(`/api/briefing.mp3?${params()}`)
@@ -166,7 +178,7 @@ export default function App() {
       const audio = new Audio(URL.createObjectURL(await r.blob()))
       audio.onended = () => setVoice('idle')
       audioRef.current = audio
-      audio.play()
+      await audio.play()
       setVoice('playing')
     } catch (e) {
       setVoice(`error: ${e.message}`)
@@ -311,9 +323,20 @@ export default function App() {
               <h2>Hear the investigation</h2>
               <p>Get the anomaly, market context, evidence, and uncertainty in one concise briefing.</p>
               <div className="actions">
-                <button className="briefing-button" onClick={playBriefing} disabled={voice === 'loading'}>
-                  <span className="play-icon" aria-hidden="true">▶</span>
-                  {voice === 'loading' ? 'Generating briefing…' : voice === 'playing' ? 'Replay briefing' : 'Voice briefing'}
+                <button
+                  className="briefing-button"
+                  onClick={toggleBriefing}
+                  disabled={voice === 'loading'}
+                  aria-pressed={voice === 'playing'}
+                >
+                  <span className="play-icon" aria-hidden="true">{voice === 'playing' ? '⏸' : '▶'}</span>
+                  {voice === 'loading'
+                    ? 'Generating briefing…'
+                    : voice === 'playing'
+                      ? 'Pause briefing'
+                      : voice === 'paused'
+                        ? 'Resume briefing'
+                        : 'Voice briefing'}
                 </button>
               </div>
               {voice.startsWith('error') && <p className="error">{voice}</p>}

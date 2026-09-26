@@ -7,7 +7,7 @@ import psycopg
 
 from config import DATABASE_URL
 
-ENABLED = bool(DATABASE_URL)
+ENABLED = bool(DATABASE_URL) and "<host>" not in DATABASE_URL
 SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
 

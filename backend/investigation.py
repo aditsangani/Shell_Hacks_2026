@@ -33,9 +33,15 @@ def _timing(pub_utc: pd.Timestamp, event) -> str:
     return "during session" if minutes < 16 * 60 else "after close"
 
 
-def _headlines(event, bar_times: pd.Series, symbol: str) -> list[dict]:
+def _headlines(event, bar_times: pd.Series, symbol: str, company: str) -> list[dict]:
     out = []
-    for i, a in enumerate(news.get_news(event, symbol), start=1):
+    event_start = prices.market_day_start_utc(event)
+    event_bars = bar_times[(bar_times >= event_start) &
+                           (bar_times < event_start + pd.Timedelta(days=1))]
+    prior_bars = bar_times[bar_times < event_bars.iloc[0]] if len(event_bars) else bar_times.iloc[0:0]
+    catalyst_start = prior_bars.iloc[-1] if len(prior_bars) else event_start
+    catalyst_end = event_bars.iloc[-1] if len(event_bars) else event_start + pd.Timedelta(days=1)
+    for i, a in enumerate(news.get_news(event, symbol, company), start=1):
         pub = pd.Timestamp(a["pub_date"]).tz_convert("UTC")
         # Pin each headline to the first bar at/after publication: when the market could react.
         later = bar_times[bar_times >= pub]
@@ -44,6 +50,7 @@ def _headlines(event, bar_times: pd.Series, symbol: str) -> list[dict]:
             "id": f"H{i}",
             "pub_date": pub.isoformat(),
             "timing": _timing(pub, event),
+            "is_potential_catalyst": bool(catalyst_start < pub <= catalyst_end),
             "chart_time": later.iloc[0].isoformat() if len(later) else None,
         })
     return out
@@ -115,6 +122,6 @@ def build(symbol: str, mode: str = "latest", company: str | None = None,
         "chart": chart,
         "chart_source": chart_source,
         "chart_caveat": chart_caveat,
-        "headlines": _headlines(event, bar_times, symbol),
+        "headlines": _headlines(event, bar_times, symbol, company),
         "similar": analysis.similar_moves(closes[symbol].dropna(), event),
     }
