@@ -60,7 +60,7 @@ export default function Divergence({ inv }) {
 
   return (
     <section id="market-context" className="card insight-card divergence-card">
-      <div className="step">2 · Company-specific or market-wide?</div>
+      <div className="step">3 · Company-specific or market-wide?</div>
       <h2>
         {inv.sector_known
           ? `${d.excess_vs_sector > 0 ? 'Outperformed' : 'Underperformed'} its sector by ${Math.abs(d.excess_vs_sector).toFixed(1)} pts`

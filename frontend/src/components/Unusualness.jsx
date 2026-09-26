@@ -21,7 +21,7 @@ export default function Unusualness({ inv }) {
 
   return (
     <section id="unusualness" className="card insight-card unusualness-card">
-      <div className="step">1 · How unusual</div>
+      <div className="step">2 · How unusual</div>
       <h2>
         <span className="big">{m.percentile}%</span>
       </h2>

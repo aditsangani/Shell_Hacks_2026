@@ -1,7 +1,7 @@
 const SECTIONS = [
-  { id: 'unusualness', number: '1', label: 'Unusualness' },
-  { id: 'market-context', number: '2', label: 'Market context' },
-  { id: 'evidence', number: '3', label: 'Evidence' },
+  { id: 'evidence', number: '1', label: 'Evidence' },
+  { id: 'unusualness', number: '2', label: 'Unusualness' },
+  { id: 'market-context', number: '3', label: 'Market context' },
   { id: 'history', number: '4', label: 'History' },
   { id: 'conclusion', number: '5', label: 'Conclusion' },
 ]

@@ -56,7 +56,7 @@ export default function App() {
   const [tlLoading, setTlLoading] = useState(false)
   const [tlError, setTlError] = useState(null)
   const [warming, setWarming] = useState(false)
-  const [activeSection, setActiveSection] = useState('unusualness')
+  const [activeSection, setActiveSection] = useState('evidence')
   const audioRef = useRef(null)
   const investigationRequest = useRef(0)
   const timelineRequest = useRef(0)
@@ -148,7 +148,7 @@ export default function App() {
     const updateActiveSection = () => {
       const atPageEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 8
       if (atPageEnd) {
-        setActiveSection(elements[elements.length - 1]?.id || 'unusualness')
+        setActiveSection(elements[elements.length - 1]?.id || SECTIONS[0].id)
         return
       }
       const readingLine = window.scrollY + 170
@@ -443,11 +443,8 @@ export default function App() {
           </section>
 
           <div className="investigation-flow">
-            <Unusualness inv={inv} />
-            <Divergence inv={inv} />
-
             <section id="evidence" className="card insight-card tl-teaser">
-              <div className="step">3 · What was published</div>
+              <div className="step">1 · What was published</div>
               <h2>Evidence timeline</h2>
               <p className="sub">
                 News and SEC filings sampled across the{' '}
@@ -458,6 +455,8 @@ export default function App() {
               <button className="primary" onClick={() => go('timeline')}>Open the timeline →</button>
             </section>
 
+            <Unusualness inv={inv} />
+            <Divergence inv={inv} />
             <SimilarMoves inv={inv} />
             <Conclusion
               timelineError={tlError}
