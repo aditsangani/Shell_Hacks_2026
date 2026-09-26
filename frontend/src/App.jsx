@@ -54,7 +54,7 @@ export default function App() {
     [route?.symbol, route?.mode]
   )
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     setLoading(true)
     setError(null)
     setInv(null)
@@ -62,7 +62,9 @@ export default function App() {
     audioRef.current = null // otherwise the next ticker replays the previous briefing
     setVoice('idle')
     try {
-      const r = await fetch(`/api/investigation?${params()}`)
+      const query = params()
+      if (refresh) query.set('refresh', '1')
+      const r = await fetch(`/api/investigation?${query}`)
       const body = await r.json()
       if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
       setInv(body)
@@ -292,7 +294,7 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button className="ghost" onClick={load} disabled={loading}>
+        <button className="ghost" onClick={() => load(true)} disabled={loading}>
           {loading ? 'Refreshing…' : '↻ Refresh'}
         </button>
       </div>
