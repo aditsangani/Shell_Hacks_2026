@@ -6,7 +6,7 @@ services:
   - name: web
     dockerfile_path: Dockerfile
     github:
-      repo: aditsangani/Shell_Hacks_2026
+      repo: riteshhattarki/Shell_Hacks_2026
       branch: main
       deploy_on_push: true
     http_port: 8080
