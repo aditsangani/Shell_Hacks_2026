@@ -58,6 +58,8 @@ export default function App() {
     setLoading(true)
     setError(null)
     setInv(null)
+    audioRef.current?.pause()
+    audioRef.current = null // otherwise the next ticker replays the previous briefing
     setVoice('idle')
     try {
       const r = await fetch(`/api/investigation?${params()}`)

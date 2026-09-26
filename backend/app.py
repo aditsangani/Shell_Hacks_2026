@@ -155,6 +155,28 @@ def get_explanations():
         return jsonify({"error": scrub(e)}), 502
 
 
+@app.get("/api/briefing.mp3")
+def get_briefing():
+    try:
+        symbol, mode, refresh = _args()
+        inv = _investigation(symbol, mode, refresh)
+    except LookupError:
+        return jsonify({"error": f"No price history for {request.args.get('symbol')!r}."}), 404
+    except ValueError as e:
+        return jsonify({"error": scrub(e)}), 400
+    except Exception as e:
+        return jsonify({"error": scrub(e)}), 502
+    try:
+        exp = _explanations(symbol, mode, refresh=False)
+    except Exception:
+        exp = None  # Gemini down or out of quota: still brief on the numbers
+    try:
+        audio = voice.synthesize(voice.briefing_script(inv, exp))
+    except Exception as e:
+        return jsonify({"error": scrub(e)}), 502
+    return Response(audio, mimetype="audio/mpeg")
+
+
 @app.get("/api/timeline")
 def get_timeline():
     """Article timeline for the mode's window: 6 months for latest, 5 years for unusual.
