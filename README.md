@@ -4,18 +4,72 @@ ShellHacks 2026 · Blackstone "Reimagining the Investor Experience"
 
 > We don't tell you what to invest in. We help you investigate what happened.
 
-Search any traded ticker, pick which session to investigate, and get a deep-dive on one move:
+Search any traded ticker, pick which session to investigate, and follow a five-card investigation:
 
 1. **How unusual:** percentile and z-score vs 5 years of daily moves
 2. **Company or market:** ticker vs its sector ETF vs SPY, intraday, with a beta-adjusted idiosyncratic move
 3. **Evidence timeline** — NYT and Yahoo Finance reporting plus SEC filings, deduplicated and ranked before Gemini triages the items that bear on the move
 4. **Has this happened before:** the closest past moves and their +1/+5/+20-day returns
 5. **Deterministic conclusion:** a rules-based synthesis of the move, market decomposition, time-filtered evidence, and historical comparisons
-6. **Voice briefing:** ElevenLabs TTS
+
+The interface adds a sticky section navigator, light and dark themes, and an ElevenLabs voice
+briefing with 1×, 1.5×, and 2× playback. The evidence timeline opens as a focused detail view
+without leaving the single-page application.
 
 The conclusion makes no additional Gemini request. It renders immediately from the price
 calculations, then updates when the existing timeline triage finishes. If triage is unavailable,
 it withholds any catalyst claim while preserving the numerical market analysis.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Investor] --> UI[React investigation UI]
+    UI -->|REST requests| API[Flask API]
+
+    subgraph Analysis[Deterministic analysis]
+        PRICE[Price and return analysis]
+        SCOPE[Beta-adjusted market decomposition]
+        HISTORY[Historical analogue search]
+        CONCLUSION[Rules-based conclusion]
+    end
+
+    API --> PRICE
+    API --> SCOPE
+    API --> HISTORY
+    PRICE --> CONCLUSION
+    SCOPE --> CONCLUSION
+    HISTORY --> CONCLUSION
+
+    YF[Yahoo Finance prices] --> PRICE
+    TS[(Tiger Data optional cache)] <--> PRICE
+
+    subgraph Evidence[Evidence pipeline]
+        COLLECT[Collect, normalize, rank, deduplicate]
+        CACHE[(Disk cache and quota state)]
+        TRIAGE[Gemini relevance triage]
+        TIMING[Deterministic market-session timing]
+    end
+
+    NYT[New York Times] --> COLLECT
+    YNEWS[Yahoo Finance News] --> COLLECT
+    SEC[SEC EDGAR] --> COLLECT
+    COLLECT --> CACHE
+    CACHE --> TRIAGE
+    TRIAGE --> TIMING
+    TIMING --> CONCLUSION
+
+    API --> VOICE[Guarded briefing script]
+    VOICE --> EL[ElevenLabs TTS]
+    EL -->|MP3| UI
+    CONCLUSION --> API
+    API --> UI
+```
+
+The numerical verdict and final conclusion are computed by application code. Gemini is used
+to triage evidence and produce guarded briefing context; it cannot replace the calculated
+stock-specific versus market-wide classification. Publication timing is also enforced in code,
+so reporting published after the session cannot be presented as its cause.
 
 ## Which session gets investigated
 
@@ -86,7 +140,7 @@ sampler is built around not making them:
 ### The stock-specific vs market-wide verdict
 
 The headline verdict is *not* left to the model. It comes from the beta-adjusted
-decomposition (`timeline.scope_verdict`): the share of the move the market's beta does not
+decomposition (`conclusion.scope_verdict`): the share of the move the market's beta does not
 explain. Gemini triages the evidence — keeping only items that plausibly bear on the move,
 labelling each `stock` / `sector` / `market`, rating significance, writing a thesis — and is
 asked to argue that number rather than invent one. If it disagrees, the disagreement is
@@ -146,10 +200,17 @@ Yahoo's rate limits. **↻ Refresh** forces a virgin fetch.
 
 ## Deploy (DigitalOcean App Platform)
 
+**Current status:** deployment-ready, but not publicly deployed. The repository contains the
+App Platform specification; the DigitalOcean app still needs to be created and given its
+runtime secrets.
+
 One Docker service. It builds React, then Flask/gunicorn serves both the API and `frontend/dist`.
 
 ```bash
 doctl apps create --spec .do/app.yaml
 ```
 
-Set the secrets in the App Platform UI. The app is served at `https://finsight-xxxxx.ondigitalocean.app`.
+Set `DATABASE_URL`, `NYT_API_KEY`, `GEMINI_API_KEY`, and `ELEVENLABS_API_KEY` in the App
+Platform UI. After the initial app is created, pushes to `main` deploy automatically because
+`.do/app.yaml` sets `deploy_on_push: true`. Replace this section with the public URL after the
+first successful deployment.
