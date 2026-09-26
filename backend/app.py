@@ -171,10 +171,14 @@ def get_briefing():
         exp = _explanations(symbol, mode, refresh=False)
     except Exception:
         exp = None  # Gemini down or out of quota: still brief on the numbers
+    script = voice.briefing_script(inv, exp)
     try:
-        audio = voice.synthesize(voice.briefing_script(inv, exp))
+        audio = voice.synthesize(script)
     except Exception as e:
-        return jsonify({"error": scrub(e)}), 502
+        # Not 502: DigitalOcean replaces upstream 502 bodies with its own HTML error page,
+        # so the UI got "<!DOCTYPE" instead of this JSON. The script lets the browser read
+        # the briefing aloud itself when ElevenLabs is unavailable.
+        return jsonify({"error": scrub(e), "script": script}), 424
     return Response(audio, mimetype="audio/mpeg")
 
 

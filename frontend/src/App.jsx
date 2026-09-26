@@ -30,6 +30,104 @@ function readRoute() {
   }
 }
 
+// Voices load asynchronously in Chrome; getVoices() is empty until this event fires.
+function loadVoices(timeout = 1500) {
+  const synth = window.speechSynthesis
+  if (synth.getVoices().length) return Promise.resolve(synth.getVoices())
+  return new Promise((resolve) => {
+    const done = () => resolve(synth.getVoices())
+    synth.addEventListener('voiceschanged', done, { once: true })
+    setTimeout(done, timeout)
+  })
+}
+
+// Neural voices first (Edge "Online (Natural)", Chrome "Google", macOS Samantha); the
+// platform default is usually the most robotic one installed.
+function pickVoice(voices) {
+  const en = voices.filter((v) => /^en[-_]?/i.test(v.lang))
+  const us = en.filter((v) => /us/i.test(v.lang))
+  for (const re of [/natural/i, /google/i, /samantha|ava|allison/i, /aria|jenny|zira/i]) {
+    const v = us.find((x) => re.test(x.name)) ?? en.find((x) => re.test(x.name))
+    if (v) return v
+  }
+  return us[0] ?? en[0] ?? null
+}
+
+// Browser text-to-speech behind the subset of the HTMLAudioElement API the briefing uses
+// (play/pause/ended/currentTime/playbackRate/onended), so an ElevenLabs outage degrades to
+// a browser voice instead of a broken button.
+//
+// Speaks one sentence per utterance: Chrome silently stops a single utterance after ~15s,
+// and its pause()/resume() is unreliable, so pause cancels and resume restarts the current
+// sentence. A per-utterance token ignores the onend that cancel() fires on the old one.
+function speechPlayer(text, rate) {
+  const synth = window.speechSynthesis
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean)
+  let index = 0
+  let token = 0
+  let voice = null
+  let speaking = false
+  let speed = rate
+
+  const player = {
+    ended: false,
+    currentTime: 0,
+    onended: null,
+    get playbackRate() { return speed },
+    set playbackRate(r) {
+      speed = r
+      if (speaking) speakCurrent() // apply the new speed now, not at the next sentence
+    },
+    async play() {
+      if (player.ended || player.currentTime === 0) index = 0
+      player.ended = false
+      if (!voice) voice = pickVoice(await loadVoices())
+      speaking = true
+      speakCurrent()
+    },
+    pause() {
+      speaking = false
+      token++
+      synth.cancel()
+    },
+  }
+
+  function speakCurrent() {
+    const mine = ++token
+    // Chrome can drop a speak() that immediately follows cancel(), so only cancel when needed.
+    if (synth.speaking || synth.pending) synth.cancel()
+    if (index >= sentences.length) {
+      speaking = false
+      player.ended = true
+      player.onended?.()
+      return
+    }
+    const u = new SpeechSynthesisUtterance(sentences[index])
+    if (voice) u.voice = voice
+    u.rate = speed
+    u.onend = () => {
+      if (mine !== token) return
+      index++
+      player.currentTime = index
+      speakCurrent()
+    }
+    u.onerror = u.onend
+    player._utterance = u // Chrome can garbage-collect a live utterance and drop its onend
+    synth.speak(u)
+  }
+
+  return player
+}
+
+async function errorMessage(r) {
+  // A proxy in front of the API can answer with an HTML error page instead of our JSON.
+  try {
+    return (await r.json()).error ?? `API ${r.status}`
+  } catch {
+    return `API ${r.status}`
+  }
+}
+
 function writeRoute(route) {
   const next = route
     ? `#s=${route.symbol}&m=${route.mode}` + (route.view === 'timeline' ? '&view=timeline' : '')
@@ -82,8 +180,8 @@ export default function App() {
       const query = params()
       if (refresh) query.set('refresh', '1')
       const r = await fetch(`/api/timeline?${query}`)
+      if (!r.ok) throw new Error(await errorMessage(r))
       const body = await r.json()
-      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
       if (requestId === timelineRequest.current) setTl(body)
     } catch (e) {
       if (requestId === timelineRequest.current) setTlError(e.message)
@@ -102,14 +200,15 @@ export default function App() {
     setTl(null)
     setInv(null)
     audioRef.current?.pause()
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     audioRef.current = null
     setVoice('idle')
     try {
       const query = params()
       if (refresh) query.set('refresh', '1')
       const r = await fetch(`/api/investigation?${query}`)
+      if (!r.ok) throw new Error(await errorMessage(r))
       const body = await r.json()
-      if (!r.ok) throw new Error(body.error ?? `API ${r.status}`)
       if (requestId !== investigationRequest.current) return
       setInv(body)
       // Reuse the completed investigation on the server instead of racing two price fetches.
@@ -238,8 +337,15 @@ export default function App() {
     setVoice('loading')
     try {
       const r = await fetch(`/api/briefing.mp3?${params()}`)
-      if (!r.ok) throw new Error((await r.json()).error)
-      const audio = new Audio(URL.createObjectURL(await r.blob()))
+      let audio
+      if (r.ok) {
+        audio = new Audio(URL.createObjectURL(await r.blob()))
+      } else {
+        const body = await r.clone().json().catch(() => null)
+        if (!body?.script || !('speechSynthesis' in window)) throw new Error(await errorMessage(r))
+        console.warn('ElevenLabs unavailable, using browser speech:', body.error)
+        audio = speechPlayer(body.script, playbackRate)
+      }
       audio.playbackRate = playbackRate
       audio.onended = () => setVoice('idle')
       audioRef.current = audio

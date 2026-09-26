@@ -15,7 +15,7 @@ def briefing_script(inv: dict, explanations: dict | None) -> str:
     m, d = inv["move"], inv["divergence"]
     direction = "rose" if m["move_pct"] > 0 else "fell"
     lines = [
-        f"Here's your briefing on {inv['company']}.",
+        f"Here's your briefing on {inv['company'].rstrip('.')}.",
         f"On {inv['event_short']}, {inv['symbol']} {direction} {abs(m['move_pct']):.1f} percent.",
         f"That's bigger than {m['percentile']:.0f} percent of its daily moves over the past five years.",
     ]
@@ -45,5 +45,13 @@ def synthesize(text: str) -> bytes:
         json={"text": text, "model_id": ELEVENLABS_MODEL},
         timeout=60,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        # raise_for_status() drops the body, which is where ElevenLabs says *why*
+        # (quota spent, key invalid, free tier blocked from datacenter IPs).
+        try:
+            detail = resp.json().get("detail")
+            detail = detail.get("message") if isinstance(detail, dict) else detail
+        except ValueError:
+            detail = None
+        raise RuntimeError(f"ElevenLabs {resp.status_code}: {detail or resp.reason}")
     return resp.content
