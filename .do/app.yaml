@@ -19,4 +19,6 @@ services:
       - { key: NYT_API_KEY, scope: RUN_TIME, type: SECRET }
       - { key: GEMINI_API_KEY, scope: RUN_TIME, type: SECRET }
       - { key: ELEVENLABS_API_KEY, scope: RUN_TIME, type: SECRET }
-      - { key: GEMINI_MODEL, scope: RUN_TIME, value: gemini-2.5-flash }
+      - { key: GEMINI_MODEL, scope: RUN_TIME, value: gemini-3.8-flash }
+      - { key: GEMINI_FALLBACK_MODEL, scope: RUN_TIME, value: gemini-3.5-flash-lite }
+      - { key: SEC_USER_AGENT, scope: RUN_TIME, value: FinSight educational research app }
